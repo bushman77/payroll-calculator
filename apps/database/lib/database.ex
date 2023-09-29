@@ -41,7 +41,7 @@ defmodule Database do
   Mnesia.create_table(Hours, [attributes: [:id, :name, :date, :hours, :notes]])
   ## Mnesia.create_table(Hours, [attributes: [:id, :name, :date, :start, :end, :rate,  :notes]])
   data_to_write = fn ->
-    Mnesia.write({Hours, 1, "Brad Anolik", "2023-08-03", 8, "description"})
+    Mnesia.write({Hours, 1, "John Doe", "2023-08-03", 8, "description"})
     Mnesia.write({Person, 5, "Hans Moleman", "unknown"})
     Mnesia.write({Person, 6, "Monty Burns", "Businessman"})
     Mnesia.write({Person, 7, "Waylon Smithers", "Executive assistant"})
@@ -55,14 +55,14 @@ defmodule Database do
 
   Mnesia.transaction(
     fn ->
-      Mnesia.write({Hours, 1, "Brad Anolik", "2023-08-04", 8, "Labourer"})
+      Mnesia.write({Hours, 1, "John Doe", "2023-08-04", 8, "Labourer"})
     end
   )
   """
 
 
   @doc """
-  GenServer.call(Database, {:match, {Hours, :_, "Brad Anolik", :_ , :_, :_, :_}})
+  GenServer.call(Database, {:match, {Hours, :_, "John Doe", :_ , :_, :_, :_}})
   """
   def handle_call({:match, query}, _from, state) do
     {:atomic, transaction} = Mnesia.transaction(fn -> Mnesia.match_object(query) end)
@@ -70,11 +70,11 @@ defmodule Database do
   end
 
   @doc """
-   tuple = {Hours, 1, "Brad Anolik", {2023, 8, 4}, 8, "Labourer", 25}
+   tuple = {Hours, 1, "John Doe", {2023, 8, 4}, 8, "Labourer", 25}
    GenServer.cast(Database, {:insert, tuple})
-   [{Hours, 1, "Brad Anolik", "2023-08-04", 8, "Labourer"}]
+   [{Hours, 1, "John Doe", "2023-08-04", 8, "Labourer"}]
 
-   GenServer.cast(Database, {:insert, {Hours, 1, "Brad Anolik", {2023, 3, 24}, 24, "Labourer", 25}})
+   GenServer.cast(Database, {:insert, {Hours, 1, "John Doe", {2023, 3, 24}, 24, "Labourer", 25}})
    """
    @impl true
   def handle_cast({:insert, tuple}, state) do
