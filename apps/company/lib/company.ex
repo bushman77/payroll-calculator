@@ -19,7 +19,7 @@ defmodule Company do
         cra_account1: %{
           description: "FULL RATE",
           ei_rate: 1.4,
-          number: "82653 2053 RT0001"
+          number: ""
         },
         cra_account2: %{description: "", ei_rate: "", number: ""},
         cra_account3: %{description: "", ei_rate: "", number: ""},
@@ -32,14 +32,14 @@ defmodule Company do
         vacation_anniversary: "01/01"
       },
       info: %{
-        address1: "BSMT - 125 26TH ST E",
+        address1: "",
         address2: "",
-        city: "North Vancouver",
-        email: "4nation.concrete.forming@gmail.com",
-        name: "4 Nation Concrete Forming",
-        phone: "(604)319-9325",
-        postalcode: "V7N 1A6",
-        province: "BC"
+        city: "",
+        email: "",
+        name: "",
+        phone: "",
+        postalcode: "",
+        province: ""
       },
       settings: %{
         allow_arrears: 0,
@@ -81,14 +81,14 @@ defmodule Company do
         vacation_anniversary: "01/01"
       },
       info: %{
-        address1: "BSMT - 125 26TH ST E",
+        address1: "",
         address2: "",
-        city: "North Vancouver",
-        email: "4nation.concrete.forming@gmail.com",
-        name: "4 Nation Concrete Forming",
-        phone: "(604)319-9325",
-        postalcode: "V7N 1A6",
-        province: "BC"
+        city: "",
+        email: "",
+        name: "",
+        phone: "",
+        postalcode: "",
+        province: ""
       },
       settings: %{
         allow_arrears: 0,
