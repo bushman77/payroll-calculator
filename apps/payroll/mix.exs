@@ -23,7 +23,7 @@ defmodule Payroll.MixProject do
   def application do
     [
       mod: {Payroll.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      extra_applications: [:logger, :runtime_tools, :employee, :database]
     ]
   end
 
@@ -36,6 +36,10 @@ defmodule Payroll.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:employee, in_umbrella: true},
+      {:database, in_umbrella: true},
+      {:company, in_umbrella: true},
+      {:core, in_umbrella: true},
       {:phoenix_pubsub, "~> 2.0"},
       {:swoosh, "~> 1.3"},
       {:pdf, "~> 0.6"}

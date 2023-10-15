@@ -12,7 +12,10 @@ defmodule Payroll.Application do
       {Phoenix.PubSub, name: Payroll.PubSub},
       # Start a worker by calling: Payroll.Worker.start_link(arg)
       # {Payroll.Worker, arg}
-      {Payroll, name: Payroll}
+      {Payroll, name: Payroll},
+      {Database, name: Database},
+      {Company, name: Company},
+      {Employee, name: Employee}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Payroll.Supervisor)

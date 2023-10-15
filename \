@@ -45,7 +45,7 @@ defmodule Employee do
       |> Map.get_and_update(key, fn current_value -> {current_value, value} end)
 
     Database.insert({Employee, full_name, struct(Employee, employee)})
-    Payroll.update(:employees, all())
+    GenServer.cast(Payroll, {:init, Employee, Employee.all()})
   end
 
   @doc """
