@@ -79,13 +79,10 @@ defmodule Core do
     module
     |> case do
       Employee ->
-        [
-          :full_name,
-          :struct
-        ]
+        [:full_name, :struct]
 
       Hours ->
-        [:full_name, :date, :shift_start, :shift_end, :rate, :notes]
+        [:full_name, :date, :shift_start, :shift_end, :hours, :rate, :notes]
 
       _ ->
         []
@@ -96,9 +93,11 @@ defmodule Core do
   sequence/1
   returns the pay sequence for a given day
   """
-  def sequence(first_payday, last_payday, date \\ Date.utc_today()) do
+  def sequence(date \\ Date.utc_today()) do
     ##    Core.periods(~D[2023-01-13], ~D[2023-12-29])
-    Core.periods(first_payday, last_payday)
+    [one, two] = [~D[2023-01-13], ~D[2023-12-29]]
+
+    Core.periods(one, two)
     |> Enum.with_index()
     |> Enum.reduce([], fn period, acc ->
       ## create list of dates for a specific payperiod based on start, cutoff and payday

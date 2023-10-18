@@ -1,10 +1,14 @@
 defmodule Payroll do
   @moduledoc """
-  Payroll keeps the contexts that define your domain
-  and business logic.
-  Contexts are also responsible for managing your data, regardless
-  if it comes from the database, an external API or others.
-  keep track of emplyees and hours worked in mnesia
+  functions:
+  calculate_pay/3 calculates deductions from a payperiod and forms a paystub, which is also emailed to recipient
+  data/0 retrieve stored data in payroll memory
+
+  update/2 update persisting data about an employee
+
+  hours/1 retrieves hours worked for an existing employee
+
+  enter_hours/1  insert a new hours tuple to the database
 
   """
   @fields [employees: [], hours: []]
@@ -16,56 +20,73 @@ defmodule Payroll do
   end
 
   @impl true
-  def init(:ok) do
-    {:ok, %{pids: [], hours: [], employees: []}}
-  end
+  def init(:ok), do: {:ok, %{hours: [], employees: []}}
 
   ## Public Functions
-  @doc """
-  calculate_pay/4
-  process current worked hours related to a given payday
-
-  """
-  def calculate_pay(name, payday, rate, hours),
-    do: GenServer.call(__MODULE__, {:calculate_pay, name, payday, rate, hours})
-
   def data(), do: GenServer.call(__MODULE__, {:load_data})
 
   def update(field, values),
     do: GenServer.cast(__MODULE__, {:update, field, values})
 
   def hours(name) do
-    date = Date.utc_today()
-    Core.sequence(date)
+    data =
+      Database.info().tables[:hours][:attributes]
+      |> Enum.reduce([], fn attribute, acc ->
+        attribute
+        |> case do
+          :full_name -> acc ++ [name]
+          _ -> acc ++ [:_]
+        end
+      end)
+
+    Database.match(List.to_tuple([Hours] ++ data))
+    # |> Enum.reduce([], fn row, acc ->
+    #  nil
+    # end)
   end
 
   @doc """
+  enter_hours/0 an empty Hours tuple for mnesia DB
   enter_hours/1
   takes a mnesia insert tuple
   {Hours,  full_name,    date,          shift_start, shift_end, rate, notes, hours}
-  {Hours, "Brad Anolik", "2023-10-15", "07:30:00",    "15:00:00",  25,  ["Labourer"], 8}
-  GenServer.cast(Database, {:insert, {Hours, "Brad Anolik", {2023, 3, 24}, 24, 25, "Labourer"}})
+  tuple = {Hours, "Brad Anolik", "2023-10-15", "07:30:00",    "15:00:00",  25,  ["Labourer"], 8}
+  {Hours, name, :_, :_, :_, :_, :_}
+  Payroll.enter_hours(tuple)
   """
-  def enter_hours(tuple) do
-    ## :full_name, :date, :shift_start, :shift_end, :rate, :notes
-    GenServer.cast(Database, {:insert, tuple})
-  end
+  def enter_hours(),
+    do: ([Hours] ++ Database.info().tables[:hours][:attributes]) |> List.to_tuple()
+
+  # {Hours, :full_name, :date, :shift_start, :shift_end, :rate, :notes}
+  def enter_hours(tuple), do: GenServer.cast(Database, {:insert, tuple})
+
+  @doc """
+  calculate_pay/4
+  process current worked hours related to a given payday
+
+  """
+  def calculate_pay(full_name, payday \\ Date.utc_today()),
+    do: GenServer.cast(__MODULE__, {:calculate_pay, full_name, payday})
 
   ## call back Functions
   ## Cast Handlers -async
-  def handle_cast({:calculate_pay, name, payday, rate, hours}, _from, state) do
-    [{d, seq}] = Core.sequence(Date.utc_today())
+  def handle_cast({:calculate_pay, full_name, date}, state) do
+    [{d, seq}] = Core.sequence(date)
+    rate = 25
+    hours = 80
+
+    employee_hours =
+      Database.match({Hours, full_name, :_, :_, :_, :_, :_})
 
     start = d.start
     cutoff = d.cutoff
     payday = d.payday
 
     ## collect hours for said employee and return a list of floats and sum it all up
-    pay_history = __MODULE__.history(name)
 
     total_hours =
       Enum.reduce(
-        pay_history,
+        Payroll.hours(full_name),
         0,
         fn day, acc ->
           acc + (day |> elem(4))
@@ -105,7 +126,7 @@ defmodule Payroll do
       |> Pdf.text_at({x1 + 390, y1}, "Period starting #{start}")
       |> Pdf.text_at({400, y1 - 10}, "Period ending   #{cutoff}")
       |> Pdf.text_at({400, y1 - 20}, "Cheque date   #{payday}")
-      |> Pdf.text_at({10, 775}, "#{name}")
+      |> Pdf.text_at({10, 775}, "#{full_name}")
       |> Pdf.text_at({x2, y2}, "EARNINGS")
       |> Pdf.text_at({x2, y2 - 20}, "REG")
       |> Pdf.text_at({x2, y2 - 30}, "GROSS")
