@@ -35,11 +35,17 @@ defmodule Payroll.Umbrella.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   #
   # Aliases listed here are available only for this project
-  # and cannot be accessed from applications inside the apps/ folder.
+  # and cannot be accessed from applications inside the apps/ folder.\
   defp aliases do
     [
-      # run `mix setup` in all child apps
-      setup: ["cmd mix setup"]
+      setup: ["deps.get", "assets.setup", "assets.build"],
+      "assets.setup": ["esbuild.install --if-missing"],
+      "assets.build": ["esbuild default"],
+      "assets.deploy": [
+        "tailwind default --minify",
+        "esbuild default --minify",
+        "phx.digest"
+      ]
     ]
   end
 end

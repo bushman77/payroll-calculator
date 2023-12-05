@@ -7,8 +7,6 @@ defmodule CompanyTest do
   end
 
   test "tests module struct" do
-    %Company{}
-    |> IO.inspect
     assert true
   end
 end

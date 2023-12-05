@@ -2,11 +2,9 @@ defmodule Core.Query do
   @doc """
   Call the DB genserver for query results
   """
-  def lookup(module, query) do
-    GenServer.call(Database, {:query, {module, query}})
-  end
+  def lookup(module, query), do: GenServer.call(Database, {:query, {module, query}})
 
-  def search_pattern(module, list) do
+  def search_pattern(_module, list) do
     list
     |> Enum.reduce([], fn _keyvalue, accumulator -> accumulator ++ [:_] end)
     |> List.insert_at(0, Employee)
@@ -33,7 +31,7 @@ defmodule Core.Query do
     {:atomic, list} = list
 
     list
-    |> Enum.reduce([], fn {mod, full_name, struct}, acc ->
+    |> Enum.reduce([], fn {_mod, full_name, struct}, acc ->
       acc ++
         [
           {
@@ -42,5 +40,20 @@ defmodule Core.Query do
           }
         ]
     end)
+  end
+
+  def update_query(table, _attr, data) when data |> is_tuple do
+    Database.table_info(table, :attributes)
+    |> Enum.reduce([], fn attribute, acc ->
+      attribute
+      |> case do
+        :full_name ->
+          acc ++ [data]
+
+        _ ->
+          acc ++ [:_]
+      end
+    end)
+    |> List.insert_at(0, Hours)
   end
 end

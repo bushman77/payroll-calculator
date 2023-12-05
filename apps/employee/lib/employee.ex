@@ -26,15 +26,13 @@ defmodule Employee do
   def attributes, do: [attributes: [:full_name, :struct]]
 
   @doc """
-  new/3
   Create a new user
   """
-  def new(first, last),
-    do:
-      Database.insert(
-        {Employee, full_name(first, last),
-         struct(%Employee{}, %{givenname: first, surname: last})}
-      )
+  def new(first, last) do
+    Database.insert(
+      {Employee, full_name(first, last), struct(%Employee{}, %{givenname: first, surname: last})}
+    )
+  end
 
   def object, do: {Employee, :_, %__MODULE__{}}
 
@@ -65,14 +63,8 @@ defmodule Employee do
   def handle_call({:list_all}, _from, state), do: {:reply, state, state}
 
   ## CASTINGS
-  #  SEND MESSAGE TO PROCESS AND
+  #  SEND MESSAGE TO PROCESS AND - ASYNCRONOUS
   #  DO NOT WAIT FOR RESPONSE
-  @impl true
-  def handle_cast({:update, {emp, fields, value}}, employees) do
-    ## extract employee from state
-    {:noreply, :new}
-  end
-
   defp full_name(first, last), do: first <> " " <> last
 
   @doc """

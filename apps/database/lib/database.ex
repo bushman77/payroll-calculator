@@ -33,14 +33,24 @@ defmodule Database do
     )
   end
 
-  def info(), do: GenServer.call(__MODULE__, {:info})
-
   def delete_table(table), do: Mnesia.delete_table(table)
+  def delete_object(tuple), do: GenServer.cast(__MODULE__, {:delete_object, tuple})
+  def info(), do: GenServer.call(__MODULE__, {:info})
   def insert(query), do: GenServer.cast(__MODULE__, {:insert, query})
   def match(query), do: GenServer.call(Database, {:match, query})
+  def table_info(table, :attributes), do: Mnesia.table_info(table, :attributes)
 
   @impl true
-  def handle_call({:info}, _from, state), do: {:reply, state, state}
+  def handle_call({:info}, _from, state) do
+    state = %{
+      tables: [
+        hours: :mnesia.table_info(Hours, :all),
+        employee: :mnesia.table_info(Employee, :all)
+      ]
+    }
+
+    {:reply, state, state}
+  end
 
   @doc """
   table headers:
@@ -83,10 +93,16 @@ defmodule Database do
   """
   @impl true
   def handle_cast({:insert, tuple}, state) do
-    tuple |> IO.inspect()
+    tuple
 
     Mnesia.transaction(fn -> Mnesia.write(tuple) end)
 
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:delete_object, tuple}, state) do
+    :mnesia.transaction(fn -> :mnesia.delete_object(Hours, tuple, :write) end)
     {:noreply, state}
   end
 end

@@ -26,6 +26,8 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 
+let esocket = new Socket("wss://api.grid.gg/live-data-feed/series/28?key=cULS5h8l0JMHHB1dySGjlKIbNuEbwdi95TXIHcUKkkk");
+console.log(esocket);
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {params: {_csrf_token: csrfToken}})
 

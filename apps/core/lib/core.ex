@@ -2,6 +2,111 @@ defmodule Core do
   @moduledoc """
   Documentation for `Core`.
   """
+  defmodule Common do
+    @moduledoc """
+    Documentation for `Core.Common`.
+    """
+
+    @doc """
+    Core.Common.full_name/2
+    creates a full name string from 2 strings
+    Function => full_name/2
+      - arity(2)
+        => first <String>: a string representing a givenname
+        => last <String>: a string representing a surname
+      - purpose: Concatenates 2 strings to form a single full name string
+      - return: "Full Name"
+
+      ## Example
+         iex> Core.Common.full_name("John", "Doe")
+         iex> "John Doe"
+    """
+    @spec full_name(String.t(), String.t()) :: String.t()
+    def full_name(first, last), do: Enum.join([first, last], " ")
+  end
+
+  defmodule DB do
+    @moduledoc """
+    Documentation for `Core.DB`.
+    Namespace to house the core logic of the database transactions
+    """
+    defmodule Query do
+      @moduledoc """
+      Documentation for `Core.DB.Query`.
+      """
+      @doc """
+      Call the DB genserver for query results
+      """
+      def lookup(module, query), do: GenServer.call(Database, {:query, {module, query}})
+
+      @doc """
+      Core.Common.replace_at(3)
+      Creates a tuple for a specific msnesia table
+      Function +> replace_at/3
+        - arity(3)
+          => table <Atom>: mnesia table in atom format for database genserver calling
+          => key <Atom> key represendint a table attribute in msnesia table
+          => val any binariy number float atom vaues
+        - purpose: to form a seach tuple for mnesia
+        - return <Tuple> based on mnesia table
+      """
+      def pattern(table, key, val) do
+        indx = Core.DB.Query.column_index(table, key)
+
+        Database.info().tables[table][:wild_pattern]
+        |> Tuple.to_list()
+        |> List.replace_at(indx + 1, val)
+        |> List.to_tuple()
+      end
+
+      @doc """
+      Core.DB.Query.match/1
+      takes a mnesia search tuple and pattern matches information from the database with it
+      Function => match/1
+        - arity(1)
+          => tuple <Tuple>: a tuple search pattern ie: \n
+             {Hours, "John Doe", :_, :_, :_, :_, :_, :_}
+        - purpose: matches a mnesia database with a given seach pattern
+      - return: [tuple|tail] || []
+
+      ## Example
+         iex> Core.DB.Query.match({Hours, "John Doe", :_, :_, :_, :_, :_, :_})
+         iex> []
+
+      """
+      def match(tuple) when is_tuple(tuple), do: Database.match(tuple)
+
+      @doc """
+      column_index/2
+      a helper function for dynmacially querying an mnesia table
+      """
+      def column_index(module, key) when is_atom(module) do
+        (Database.info().tables[module][:attributes]
+         |> Enum.with_index())[key]
+      end
+    end
+
+    @doc """
+    Core.DB.info/0
+    retrives information about the database engine state
+    Function => info/0
+      - arity(0)
+      - purpose: retrieves table configurations and properties
+    """
+    def info(), do: Database.info()
+
+    @doc """
+    Core.DB.insert/1
+    inserts a tuple as a new row in mnesia database table
+    Function => insert/1
+      - arity(1)\n
+        => query <Tuple>: A tuple representing a row from a mnesia table
+           - ex
+      - purpose: Insert new data into a mnesia table
+      - return :ok
+    """
+    def insert(query), do: Database.insert(query)
+  end
 
   @type t() :: %Date{
           calendar: Calendar.calendar(),
@@ -95,6 +200,7 @@ defmodule Core do
   """
   def sequence(date \\ Date.utc_today()) do
     ##    Core.periods(~D[2023-01-13], ~D[2023-12-29])
+    # First and last paydays
     [one, two] = [~D[2023-01-13], ~D[2023-12-29]]
 
     Core.periods(one, two)
@@ -117,6 +223,14 @@ defmodule Core do
     end)
   end
 
+  def date_in_sequence?(date) do
+    date =
+      date
+      |> Date.from_iso8601!()
+
+    seq = sequence(date)
+  end
+
   @spec alpha(Calendar.date()) :: String.t()
   def alpha(day),
     do:
@@ -124,52 +238,6 @@ defmodule Core do
         ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
         Date.day_of_week(day)
       )
-
-  @doc """
-  determinatiion of which tax bracket employee in and what rate should be applied
-  To verify the EI deduction, follow these steps:
-
-  Step 1: Enter the insurable earnings for the year as indicated in each employee's payroll master file for the period of insurable employment. The amount should not be more than the maximum annual amount of $60,300 (for 2022).
-
-  Step 2: Enter the employee's EI premium rate for the year (1.58% for 2022 – for Quebec, use 1.20%).
-
-  Step 3: Multiply the amount in step 1 by the rate in step 2 to calculate the employee's EI premiums payable for the year. The amount should not be more than the maximum annual amount of $952.74 ($723.60 for Quebec) for 2022.
-
-  Step 4: Enter the employee's EI premium deductions for the period of insurable employment as indicated in the employee's payroll master file.
-
-  Step 5: Step 3 minus step 4. The result should be zero.
-
-  If the amount in step 5 is positive, you have under deducted. If this is the case, add the amounts in step 4 and step 5 and include the total in Box 18 – Employee's EI premiums, on the T4 slip.
-
-
-  # abbr's:
-   maei: maximum annual insurable earnings
-   maeep: maximun annual employee premiums
-   maerp: maximum annual employer premiums
-  #
-  # Info from https://www2.gov.bc.ca/gov/content/taxes/income-taxes/personal/tax-rates
-  # https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/payroll/payroll-deductions-contributions/employment-insurance-ei/ei-premium-rate-maximum.html
-  #
-   2023	$61,500	1.63	$1,002.45i	$1,403.43
-  """
-  def ei(year, years_income, gross_pay) do
-    # years_income = 2000*14
-    {year, years_income}
-    |> case do
-      {2023, income} when years_income <= 61500 ->
-        obj = %{maie: 61500, ecr: 0.0163, maeep: 1002.45, maarp: 1403.43}
-        _step1 = years_income
-        step3 = income * obj.ecr
-
-        cond do
-          step3 <= 1002.45 ->
-            gross_pay * obj.ecr - income * obj.ecr
-        end
-
-      _ ->
-        :noop
-    end
-  end
 
   @doc """
   (mape  = maximum annual pensionable earnings),

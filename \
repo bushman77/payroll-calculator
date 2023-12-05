@@ -1,10 +1,18 @@
-defmodule Employee do
+defmodule Payroll do
   @moduledoc """
-  Documentation for `Employee`.
-  @fields list of keyvalues describing an Employee object
+  functions:
+  calculate_pay/3 calculates deductions from a payperiod and forms a paystub, which is also emailed to recipient
+  data/0 retrieve stored data in payroll memory
+
+  update/2 update persisting data about an employee
+
+  hours/1 retrieves hours worked for an existing employee
+
+  enter_hours/1  insert a new hours tuple to the database
+
   """
-  @pattern {Employee, "John Doe", :_}
-  defstruct Core.struct(Employee)
+  @fields [employees: [], hours: []]
+  defstruct @fields
   use GenServer
 
   def start_link(opts) do
@@ -12,77 +20,175 @@ defmodule Employee do
   end
 
   @impl true
-  def init(:ok) do
-    data =
-      GenServer.call(Database, {:all, Employee})
-      |> Core.Query.update_state()
+  def init(:ok), do: {:ok, %{hours: [], employees: []}}
 
-    GenServer.cast(Payroll, {:init, Employee, data})
-    {:ok, %{pattern: @pattern, result: []}}
+  ## Public Functions
+  def data(), do: GenServer.call(__MODULE__, {:load_data})
+
+  def update(field, values),
+    do: GenServer.cast(__MODULE__, {:update, field, values})
+
+  def hours(full_name) do
+    ## retrieve current payperiod
+    today = Core.sequence()
+
+    Database.match({Hours, full_name, :_, :_, :_, :_, :_, :_})
+    |> Enum.reduce([], fn tuple, acc ->
+      date = elem(tuple, 2) |> Date.from_iso8601!()
+      shift_start = elem(tuple, 3) |> Time.from_iso8601!()
+      shift_end = elem(tuple, 4) |> Time.from_iso8601!()
+
+      hours_worked =
+        Time.diff(shift_end, shift_start, :hour)
+
+      acc ++ [hours_worked]
+    end)
   end
 
-  ## PUBLIC FUNCTIONS
-  def all, do: Core.Query.update_state(GenServer.call(Database, {:all, Employee}))
-  def attributes, do: [attributes: [:full_name, :struct]]
+  def hours(full_name, :all) do
+    ## here we will query the database for all hours worked for all history
+    :mnesia.table_info(Hours, :wild_pattern)
 
-  @doc """
-  new/3
-  Create a new user
-  """
-  def new(first, last),
-    do:
-      Database.insert(
-        {Employee, full_name(first, last),
-         struct(%Employee{}, %{givenname: first, surname: last})}
-      )
+    :mnesia.table_info(Hours, :attributes)
+    |> Enum.reduce([], fn attribute, acc ->
+      attribute
+      |> case do
+        :full_name ->
+          acc ++ [full_name]
 
-  def object, do: {Employee, :_, %__MODULE__{}}
-
-  def update(full_name, key, value) do
-    {_o, employee} =
-      Payroll.data().employees[String.to_atom(full_name)]
-      |> Map.from_struct()
-      |> Map.get_and_update(key, fn current_value -> {current_value, value} end)
-
-    Database.insert({Employee, full_name, struct(Employee, employee)})
-    GenServer.cast(Payroll, {:init, Employee, Employee.all()})
+        _ ->
+          acc ++ [:_]
+      end
+    end)
+    |> List.insert_at(0, Hours)
+    |> List.to_tuple()
   end
 
   @doc """
-  get_state/0
-  returns the current state of this modules genserver
-
+  enter_hours/0 an empty Hours tuple for mnesia DB
+  :mnesia.table_info(Hours, :wild_pattern)
+  enter_hours/1
+  takes a mnesia insert tuple
+  tuple = {Hours, "Brad Anolik", "2023-10-15", "07:30:00",    "15:00:00",  25,  8, ["Labourer"]}
+  Payroll.enter_hours(tuple)
   """
-  def get_state, do: GenServer.call(__MODULE__, {:get_state})
-
-  ## HANDLER FUNCTIONS
-  ### CALL BACKS - SYNCRONOUS calls
-  #   WAIT FOR PROCESS TO RESPOND BACK
-  @impl true
-  def handle_call({:get_state}, _from, state), do: {:reply, state, state}
-
-  @impl true
-  def handle_call({:list_all}, _from, state), do: {:reply, state, state}
-
-  ## CASTINGS
-  #  SEND MESSAGE TO PROCESS AND
-  #  DO NOT WAIT FOR RESPONSE
-  @impl true
-  def handle_cast({:update, {emp, fields, value}}, employees) do
-    ## extract employee from state
-    {:noreply, :new}
-  end
-
-  defp full_name(first, last), do: first <> " " <> last
+  def enter_hours(), do: :mnesia.table_info(Hours, :wild_pattern)
+  def enter_hours(tuple), do: GenServer.cast(Database, {:insert, tuple})
 
   @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> Employee.hello()
-      :world
+  calculate_pay/4
+  process current worked hours related to a given payday
 
   """
-  def hello, do: :world
+  def calculate_pay(full_name, day \\ Date.utc_today()),
+    do: GenServer.cast(__MODULE__, {:calculate_pay, full_name, day})
+
+  ## call back Functions
+  ## Cast Handlers -async
+  @impl true
+  def handle_cast({:calculate_pay, full_name, date}, state) do
+    [{d, _seq}] = Core.sequence(date)
+    rate = 25
+
+    work_history =
+      Database.match({Hours, full_name, :_, :_, :_, :_, :_, :_})
+
+    hours =
+      work_history
+      |> Enum.reduce(0, fn tuple, acc -> acc + elem(tuple, 5) end)
+
+    start = d.start
+    cutoff = d.cutoff
+    payday = d.payday
+
+    ## collect hours for said employee and return a list of floats and sum it all up
+
+    grosspay =
+      (hours * rate)
+      |> Integer.to_string()
+      |> Float.parse()
+      |> elem(0)
+      |> Float.floor()
+
+    total_earnings = hours * rate
+
+    cpp =
+      Core.cpp(2023, hours, rate)
+      |> Float.floor(2)
+
+    total_cpp =
+      Core.cpp(2023, work_history, rate)
+      |> Float.floor(2)
+
+    ei = Core.ei(2023, total_earnings, grosspay)
+    ei_total = 8
+
+    [x1, y1] = [10, 825]
+    [x2, y2] = [10, 750]
+    [x3, y3] = [300, 750]
+
+    Pdf.build([size: :a4, compress: true], fn pdf ->
+      pdf
+      |> Pdf.set_info(title: "PayStub")
+      |> Pdf.set_font("Helvetica", 15)
+      |> Pdf.text_at({x1, y1}, "#{Company.info()[:info].name}")
+      |> Pdf.set_font("Helvetica", 10)
+      |> Pdf.text_at({x1 + 390, y1}, "Period starting #{start}")
+      |> Pdf.text_at({400, y1 - 10}, "Period ending   #{cutoff}")
+      |> Pdf.text_at({400, y1 - 20}, "Cheque date   #{payday}")
+      |> Pdf.text_at({10, 775}, "#{full_name}")
+      |> Pdf.text_at({x2, y2}, "EARNINGS")
+      |> Pdf.text_at({x2, y2 - 20}, "REG")
+      |> Pdf.text_at({x2, y2 - 30}, "GROSS")
+      |> Pdf.text_at({x2 + 40, y2 - 10}, "Rate")
+      |> Pdf.text_at({x2 + 40, y2 - 20}, "#{rate}")
+      |> Pdf.text_at({x2 + 90, y2 - 10}, "Hours")
+      |> Pdf.text_at({x2 + 90, y2 - 20}, "#{hours}")
+      |> Pdf.text_at({x2 + 140, y2 - 10}, "Current")
+      |> Pdf.text_at({x2 + 140, y2 - 20}, "#{rate * hours}")
+      |> Pdf.text_at({x2 + 140, y2 - 30}, "#{}")
+      |> Pdf.text_at({x2 + 190, y2 - 10}, "YTD")
+      |> Pdf.text_at({x2 + 190, y2 - 20}, "#{total_earnings}")
+      |> Pdf.text_at({x2 + 190, y2 - 30}, "#{total_earnings}")
+      |> Pdf.text_at({x3, y3}, "DEDUCTIONS")
+      |> Pdf.text_at({x3 + 50, y3 - 10}, "")
+      |> Pdf.text_at({x3 + 50, y3 - 20}, "Inc Tax")
+      |> Pdf.text_at({x3 + 100, y3 - 20}, "177.10")
+      |> Pdf.text_at({x3 + 150, y3 - 20}, "177.10")
+      |> Pdf.text_at({x3 + 50, y3 - 30}, "C.P.P.")
+      |> Pdf.text_at({x3 + 100, y3 - 30}, "#{cpp}")
+      |> Pdf.text_at({x3 + 150, y3 - 30}, "#{total_cpp}")
+      |> Pdf.text_at({x3 + 50, y3 - 40}, "E.I.")
+      |> Pdf.text_at({x3 + 100, y3 - 40}, "#{ei}")
+      |> Pdf.text_at({x3 + 150, y3 - 40}, "#{ei_total}")
+      |> Pdf.text_at({x3 + 50, y3 - 50}, "Total")
+      |> Pdf.text_at({x3 + 100, y3 - 50}, "316.91")
+      |> Pdf.text_at({x3 + 150, y3 - 50}, "316.91")
+      |> Pdf.text_at({x3 + 100, y3 - 10}, "Current")
+      |> Pdf.text_at({x3 + 150, y3 - 10}, "YTD")
+      |> Pdf.text_at({10, 600}, "Net pay: 1,633.09")
+      |> Pdf.write_to("test.pdf")
+    end)
+
+    {:noreply, state}
+  end
+
+  def handle_cast({:init, name, list}, state) do
+    {:noreply,
+     name
+     |> case do
+       Employee -> %{state | employees: list}
+       _ -> state
+     end}
+  end
+
+  def handle_cast({:update, field, values}, state) do
+    {:noreply, put_in(state, [field], values)}
+  end
+
+  ## Call Handlers -sync
+  @impl true
+  def handle_call({:load_data}, _from, state) do
+    {:reply, state, state}
+  end
 end

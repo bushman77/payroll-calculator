@@ -18,7 +18,6 @@ import Config
 # at the `config/runtime.exs`.
 config :payroll, Payroll.Mailer, adapter: Swoosh.Adapters.Local
 
-
 # Swoosh API client is needed for adapters other than SMTP.
 config :swoosh, :api_client, false
 
@@ -46,6 +45,17 @@ config :esbuild,
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
+
+config :tailwind,
+  version: "3.3.5",
+  default: [
+    args: ~w(
+    --config=tailwind.config.js
+    --input=../apps/payroll_web/assets/css/app.css
+    --output=../apps/payroll_web/priv/static/assets/app.css
+  ),
+    cd: Path.expand("../assets", __DIR__)
+  ]
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason

@@ -7,6 +7,9 @@
     <meta name="csrf-token" content={csrf_token_value()}>
     <!-- <%= live_title_tag assigns[:page_title] || "Payroll", suffix: " · Phoenix Framework" %> -->
     <link href={Routes.static_path(@conn, "/assets/payroll.css")} />
+    <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.tailwindcss.com"></script>
     <script defer phx-track-static type="text/javascript" src={Routes.static_path(@conn, "/assets/app.js")}></script>
   </head>
   <body>
