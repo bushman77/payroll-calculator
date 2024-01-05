@@ -1,20 +1,12 @@
 defmodule Payroll do
   @moduledoc """
-  functions:
-  calculate_pay/3 calculates deductions from a payperiod and forms a paystub, which is also emailed to recipient
-  data/0 retrieve stored data in payroll memory
-
-  update/2 update persisting data about an employee
-
-  hours/1 retrieves hours worked for an existing employee
-
-  enter_hours/1  insert a new hours tuple to the database
-
+  Documentation for Payroll module
   """
   @fields [employees: [], hours: []]
   defstruct @fields
   use GenServer
-  import Core.DB.Query, only: [match: 1, update_query: 3]
+  # , update_query: 3]
+  import Core.Query, only: [match: 1]
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, :ok, opts)
@@ -55,55 +47,38 @@ defmodule Payroll do
   # https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/payroll/payroll-deductions-contributions/employment-insurance-ei/ei-premium-rate-maximum.html
   #
    2023	$61,500	1.63	$1,002.45	$1,403.43
+
+   ei/2
   """
   def ei(year, hours) do
     ## step 1 insurable earings for the year
-    years_income = hours * 25
     ## 0.0163 × $1,200 = $19.56
-    hours = 12 * 160
 
     {year, hours * 25}
     |> case do
-      {y, insurable_earnings}
+      {year, insurable_earnings}
       when year == 2023 and
              insurable_earnings <= 61500 and
              insurable_earnings <= 45654 ->
-        insurable_earnings * 0.0163
+        ## period of insurable employment should not be more than the maximum annual amount of $952.74
+        (insurable_earnings * 0.0163)
+        |> case do
+          a when a <= 952.74 ->
+            a
+            |> Float.floor(2)
+
+          _ ->
+            :err
+        end
 
       _ ->
         :err
     end
-
-    {year, years_income}
-    |> case do
-      {2023, income} when years_income <= 61500 ->
-        obj = %{maie: 61500, ecr: 0.0163, maeep: 1002.45, maarp: 1403.43}
-        _step1 = years_income
-        step3 = income * obj.ecr
-
-        cond do
-          step3 <= 1002.45 ->
-            hours * 25 * obj.ecr - income * obj.ecr
-        end
-
-      _ ->
-        :noop
-    end
   end
 
   def hours(full_name) do
-    query = Core.DB.Query.pattern(:hours, :full_name, full_name)
+    query = Core.Query.pattern(:hours, :full_name, full_name)
     GenServer.call(__MODULE__, {:hours, query})
-  end
-
-  def handle_call({:hours, query}, _from, state) do
-    ## retrieve current payperiod
-    today = Core.sequence()
-
-    state =
-      %{state | hours: match(query)}
-
-    {:reply, state, state}
   end
 
   @doc """
@@ -118,7 +93,7 @@ defmodule Payroll do
   def enter_hours(tuple), do: GenServer.cast(Database, {:insert, tuple})
 
   def current_hours(full_name) do
-    [{current_pay_sequence, seq}] = Core.sequence()
+    [{current_pay_sequence, _seq}] = Core.sequence()
 
     history =
       hours(full_name)
@@ -159,69 +134,47 @@ defmodule Payroll do
 
     rate = 25
 
-    ## Update the state of the genserve with the database tables
-    state = %{state | hours: Core.DB.Query.match({Hours, full_name, :_, :_, :_, :_, :_, :_})}
+    ## update the state with all work records for a given employee
+    state = %{state | hours: Core.Query.match({Hours, full_name, :_, :_, :_, :_, :_, :_})}
 
-    hours =
-      state.hours
+    ## lets grab all the current payperiod dates worked
+    pay_period_hours =
+      Core.Common.hours_total(state, d.start, d.cutoff)
+
+    ## calculate the sum of the hours worked
+    pay_period_hours_totaled =
+      pay_period_hours
       |> Enum.reduce(0, fn tuple, acc -> acc + elem(tuple, 5) end)
 
-    hours_total =
+    work_history_hours_totaled =
       state.hours
       |> Enum.reduce(0, fn tuple, acc ->
         acc + elem(tuple, 5)
       end)
 
+    ## collect the payperiod days and sequence
     start = d.start
     cutoff = d.cutoff
     payday = d.payday
 
-    ## witht he state having being updated with the hours data
-    #  current_hours(full_name)
-    current_hours =
-      state.hours
-      |> Enum.reduce([], fn row, acc ->
-        dt =
-          row
-          |> elem(2)
-          |> Date.from_iso8601!()
-
-        ## filter hours table and return hours in declared range
-        Date.range(d.start, d.cutoff)
-        |> Enum.member?(dt)
-        |> case do
-          true -> acc ++ [row |> elem(6)]
-          _ -> acc
-        end
-      end)
-      |> Enum.sum()
-
-    ## collect hours for said employee and return a list of floats and sum it all up
-
-    grosspay =
-      (hours * rate)
-      |> Integer.to_string()
-      |> Float.parse()
-      |> elem(0)
-      |> Float.floor()
-
-    year_to_date = hours * rate
-
+    ## calculate the required cpp deductions
     cpp =
-      Core.cpp(2023, current_hours, rate)
-      |> Float.floor(2)
+      Core.cpp(2023, pay_period_hours_totaled, rate)
 
     cpp_total =
-      Core.cpp(2023, hours_total, rate)
-      |> Float.floor(2)
+      Core.cpp(2023, work_history_hours_totaled, rate)
 
-    ei = ei(2023, current_hours)
-    ei_total = ei(2023, hours_total)
+    ## calculate ei deductions
+    ei =
+      ei(2023, pay_period_hours_totaled)
 
-    income_tax = 0.0506 * (current_hours * rate)
+    ei_total =
+      ei(2023, work_history_hours_totaled)
+
+    income_tax = 0.0506 * (pay_period_hours_totaled * rate)
 
     income_tax_total =
-      0.0506 * (hours_total * rate)
+      0.0506 * (work_history_hours_totaled * rate)
 
     [x1, y1] = [10, 825]
 
@@ -244,12 +197,12 @@ defmodule Payroll do
       |> Pdf.text_at({x2 + 40, y2 - 10}, "Rate")
       |> Pdf.text_at({x2 + 40, y2 - 20}, "#{rate}")
       |> Pdf.text_at({x2 + 90, y2 - 10}, "Hours")
-      |> Pdf.text_at({x2 + 90, y2 - 20}, "#{current_hours}")
+      |> Pdf.text_at({x2 + 90, y2 - 20}, "#{pay_period_hours_totaled}")
       |> Pdf.text_at({x2 + 140, y2 - 10}, "Current")
-      |> Pdf.text_at({x2 + 140, y2 - 20}, "$#{current_hours * rate}")
+      |> Pdf.text_at({x2 + 140, y2 - 20}, "$#{pay_period_hours_totaled * rate}")
       |> Pdf.text_at({x2 + 140, y2 - 30}, "#{}")
       |> Pdf.text_at({x2 + 190, y2 - 10}, "YTD")
-      |> Pdf.text_at({x2 + 190, y2 - 20}, "#{hours_total * rate}")
+      |> Pdf.text_at({x2 + 190, y2 - 20}, "#{work_history_hours_totaled * rate}")
       |> Pdf.text_at({x2 + 190, y2 - 30}, "#{}")
       |> Pdf.text_at({x3, y3}, "DEDUCTIONS")
       |> Pdf.text_at({x3 + 50, y3 - 10}, "")
@@ -285,6 +238,13 @@ defmodule Payroll do
 
   def handle_cast({:update, field, values}, state) do
     {:noreply, put_in(state, [field], values)}
+  end
+
+  def handle_call({:hours, query}, _from, state) do
+    ## retrieve current payperiod
+    %{state | hours: match(query)}
+
+    {:reply, state, state}
   end
 
   ## Call Handlers -sync

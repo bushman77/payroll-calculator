@@ -31,6 +31,9 @@ config :payroll_web, PayrollWeb.Endpoint,
   pubsub_server: Payroll.PubSub,
   live_view: [signing_salt: "wvOpEzHu"]
 
+# Configure Mnesia database connection
+config :mnesia, dir: ~c"Mnesia.nonode@nohost/"
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.14.29",

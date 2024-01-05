@@ -11,7 +11,7 @@ defmodule PayrollWeb.MixProject do
       lockfile: "../../mix.lock",
       elixir: "~> 1.12",
       elixirc_paths: elixirc_paths(Mix.env()),
-      compilers: [:gettext] ++ Mix.compilers(),
+      compilers: [] ++ Mix.compilers(),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps()
@@ -24,7 +24,7 @@ defmodule PayrollWeb.MixProject do
   def application do
     [
       mod: {PayrollWeb.Application, []},
-      extra_applications: [:logger, :runtime_tools, :gettext]
+      extra_applications: [:logger, :runtime_tools]
     ]
   end
 
@@ -46,7 +46,7 @@ defmodule PayrollWeb.MixProject do
       {:esbuild, "~> 0.7", runtime: Mix.env() == :dev},
       {:telemetry_metrics, "~> 0.6"},
       {:telemetry_poller, "~> 1.0"},
-      {:gettext, "~> 0.18"},
+       {:gettext, "~> 0.18"},
       {:payroll, in_umbrella: true},
       {:jason, "~> 1.2"},
       {:plug_cowboy, "~> 2.5"},

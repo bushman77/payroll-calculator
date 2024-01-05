@@ -15,7 +15,7 @@ defmodule Payroll.Application do
       {Payroll, name: Payroll},
       {Database, name: Database},
       {Company, name: Company},
-      {Employee, name: Employee}
+      #{Employee, name: Employee}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Payroll.Supervisor)

@@ -1,7 +1,67 @@
 defmodule Core do
   @moduledoc """
   Documentation for `Core`.
+  Utilizies Nested modules
   """
+  defmodule Csv do
+    def hello(), do: :world
+
+    @doc """
+    open/2
+    opens a CSV file and retuns rows of data contained within
+    """
+    def open(file) do
+      #      File.read!("./bank_statement.csv")
+      File.read!(file)
+      |> String.split("\n")
+      |> Enum.reduce([], fn row, acc ->
+        split = String.split(row, ",")
+
+        Enum.at(split, 2)
+        |> case do
+          "INTERAC e-Transfer From: DAVID F" -> acc ++ [split]
+          _ -> acc
+        end
+      end)
+    end
+
+    @doc """
+    sum_hours/2
+    calculates the numerical data contained within a specified column in a csv table
+    """
+    def sum_hours(list, column) do
+      list
+      |> Enum.reduce(0, fn row, acc ->
+        Enum.at(row, column)
+        |> String.contains?(".")
+        |> case do
+          true ->
+            pay = Enum.at(row, column) |> String.to_float()
+            acc + pay
+
+          _ ->
+            pay = Enum.join([Enum.at(row, column), ".0"]) |> String.to_float()
+            acc + pay
+        end
+      end)
+    end
+
+    def from_MMDDYYYY(date) do
+      [month, day, year] = String.split(date, "/")
+
+      Enum.join([year, calandar_syntax(month), calandar_syntax(day)], "-")
+      |> Date.from_iso8601!()
+    end
+
+    def calandar_syntax(unit) do
+      String.length(unit)
+      |> case do
+        1 -> Enum.join(["0", unit])
+        _ -> unit
+      end
+    end
+  end
+
   defmodule Common do
     @moduledoc """
     Documentation for `Core.Common`.
@@ -23,67 +83,120 @@ defmodule Core do
     """
     @spec full_name(String.t(), String.t()) :: String.t()
     def full_name(first, last), do: Enum.join([first, last], " ")
+
+    @doc """
+    Core.Common.hours_total/3|n
+    calculates the hours currently stored in the Payroll GenServer\n
+    Function => hours_total/3\n
+    -arity(2)\n
+      => first <State>: a state of a managed GenServer\n
+      => second <Date>: a date sigil eg: ~D[2023-11-15]\n
+      => third <Date>: a date sigil eg: ~D[2023-11-15]\n
+    purpose: calculates a list of integers for its total\n
+    reiturn: 1\n
+    \n
+    ## Example:
+       iex> state = Payroll.data()\n
+       iex> Core.Common.hours_total(state, ~D[2023-12-01], ~D[2023-12-15])\n
+       iex> 80\n
+    """
+    def hours_total(state, start, cutoff) do
+      state.hours
+      |> Enum.reduce([], fn tuple, acc ->
+        Date.range(start, cutoff)
+        |> Enum.member?(Date.from_iso8601!(elem(tuple, 2)))
+        |> case do
+          true -> acc ++ [tuple]
+          _ -> acc
+        end
+      end)
+    end
   end
 
-  defmodule DB do
+  defmodule Query do
     @moduledoc """
     Documentation for `Core.DB`.
     Namespace to house the core logic of the database transactions
     """
-    defmodule Query do
-      @moduledoc """
-      Documentation for `Core.DB.Query`.
-      """
-      @doc """
-      Call the DB genserver for query results
-      """
-      def lookup(module, query), do: GenServer.call(Database, {:query, {module, query}})
+    @doc """
+    Call the DB genserver for query results
+    """
+    def lookup(module, query), do: GenServer.call(Database, {:query, {module, query}})
 
-      @doc """
-      Core.Common.replace_at(3)
-      Creates a tuple for a specific msnesia table
-      Function +> replace_at/3
-        - arity(3)
-          => table <Atom>: mnesia table in atom format for database genserver calling
-          => key <Atom> key represendint a table attribute in msnesia table
-          => val any binariy number float atom vaues
-        - purpose: to form a seach tuple for mnesia
-        - return <Tuple> based on mnesia table
-      """
-      def pattern(table, key, val) do
-        indx = Core.DB.Query.column_index(table, key)
+    @doc """
+    Core.Common.replace_at(3)
+    Creates a tuple for a specific msnesia table
+    Function +> replace_at/3
+      - arity(3)
+        => table <Atom>: mnesia table in atom format for database genserver calling
+        => key <Atom> key represendint a table attribute in msnesia table
+        => val any binariy number float atom vaues
+      - purpose: to form a seach tuple for mnesia
+      - return <Tuple> based on mnesia table
+    """
+    def pattern(table, key, val) do
+      indx = column_index(table, key)
 
-        Database.info().tables[table][:wild_pattern]
-        |> Tuple.to_list()
-        |> List.replace_at(indx + 1, val)
-        |> List.to_tuple()
-      end
+      Database.info().tables[table][:wild_pattern]
+      |> Tuple.to_list()
+      |> List.replace_at(indx + 1, val)
+      |> List.to_tuple()
+    end
 
-      @doc """
-      Core.DB.Query.match/1
-      takes a mnesia search tuple and pattern matches information from the database with it
-      Function => match/1
-        - arity(1)
-          => tuple <Tuple>: a tuple search pattern ie: \n
-             {Hours, "John Doe", :_, :_, :_, :_, :_, :_}
-        - purpose: matches a mnesia database with a given seach pattern
-      - return: [tuple|tail] || []
+    @doc """
+    Core.DB.Query.match/1
+    takes a mnesia search tuple and pattern matches information from the database with it
+    Function => match/1
+      - arity(1)
+        => tuple <Tuple>: a tuple search pattern ie: \n
+           {Hours, "John Doe", :_, :_, :_, :_, :_, :_}
+      - purpose: matches a mnesia database with a given seach pattern
+    - return: [tuple|tail] || []
 
-      ## Example
-         iex> Core.DB.Query.match({Hours, "John Doe", :_, :_, :_, :_, :_, :_})
-         iex> []
+    ## Example
+       iex> Core.DB.Query.match({Hours, "John Doe", :_, :_, :_, :_, :_, :_})
+       iex> []
 
-      """
-      def match(tuple) when is_tuple(tuple), do: Database.match(tuple)
+    """
+    def match(tuple) when is_tuple(tuple), do: Database.match(tuple)
 
-      @doc """
-      column_index/2
-      a helper function for dynmacially querying an mnesia table
-      """
-      def column_index(module, key) when is_atom(module) do
-        (Database.info().tables[module][:attributes]
-         |> Enum.with_index())[key]
-      end
+    @doc """
+    column_index/2
+    a helper function for dynmacially querying an mnesia table
+    """
+    def column_index(module, key) when is_atom(module) do
+      (Database.info().tables[module][:attributes]
+       |> Enum.with_index())[key]
+    end
+
+    def update_state(list) do
+      {:atomic, list} = list
+
+      list
+      |> Enum.reduce([], fn {_mod, full_name, struct}, acc ->
+        acc ++
+          [
+            {
+              String.to_atom(full_name),
+              struct
+            }
+          ]
+      end)
+    end
+
+    def update_query(table, _attr, data) when data |> is_tuple do
+      Database.table_info(table, :attributes)
+      |> Enum.reduce([], fn attribute, acc ->
+        attribute
+        |> case do
+          :full_name ->
+            acc ++ [data]
+
+          _ ->
+            acc ++ [:_]
+        end
+      end)
+      |> List.insert_at(0, Hours)
     end
 
     @doc """
@@ -134,12 +247,23 @@ defmodule Core do
 
   @doc """
   Core.periods/2
+  \nreturns a list of maps provided by the 1st payday and last payday of a given year
+  \nFunction => periods/2
+  \n  - arity(2)
+  \n    => first <Date>: a Date Sigil to represent the 1st payday of the year
+  \n         ie: ~D[2023-01-13]
+  \n    => second <Date>: a Date Sigil to represent the last payday of the year
+  \n         ie: ~D[2023-12-29]
+  \n
+  \n  - purpose: returns a list of all the payperiods for a range of dates ie: a list of maps [%{}]
+  \n## Example
+    iex> Core.periods(~D[2023-01-13], ~D[2023-12-29])\n
+    iex> [ %{start: ~D[2022-12-24], cutoff: ~D[2023-01-06], payday: ~D[2023-01-13]}, ..., %{start: ~D[2023-12-09], cutoff: ~D[2023-12-22], payday: ~D[2023-12-29]}
+         ]
 
-  Core.periods(~D[2023-01-13], ~D[2023-12-29])
-  returns a list of all the payperiods for a range of dates
   """
-  def periods(p1, p2) do
-    Enum.reduce(Date.range(p1, p2, 14), [], fn period, acc ->
+  def periods(first, last) do
+    Enum.reduce(Date.range(first, last, 14), [], fn period, acc ->
       acc ++ [%{payday: period, start: Date.add(period, -18 - 2), cutoff: Date.add(period, -7)}]
     end)
   end
@@ -228,7 +352,7 @@ defmodule Core do
       date
       |> Date.from_iso8601!()
 
-    seq = sequence(date)
+    sequence(date)
   end
 
   @spec alpha(Calendar.date()) :: String.t()
@@ -298,15 +422,8 @@ defmodule Core do
   """
   def cpp(year, hours, rate) do
     cond do
-      year == 2023 ->
-        cal(3500, 52, 0.0595, hours, rate)
-
-      year == 2022 ->
-        ## %{mape: 64900, bea: 3500, mce: 61400, eecr: 0.0570, maeec: 3499.80, masec: 6999.60}
-        basic_pay_period_exemption = 3500 / 52
-        total_pensionable_income = hours * rate
-
-        (total_pensionable_income - basic_pay_period_exemption) * 0.057
+      year == 2023 -> cal(3500, 52, 0.0595, hours, rate)
+      year == 2022 -> cal(2500, 52, 0.057, hours, rate)
     end
   end
 
@@ -314,7 +431,8 @@ defmodule Core do
     basic_pay_period_exemption = basic_exemption_amount / period_type
     total_pensionable_income = hours * rate
 
-    (total_pensionable_income - basic_pay_period_exemption) * contribution_rate
+    ((total_pensionable_income - basic_pay_period_exemption) * contribution_rate)
+    |> Float.floor(2)
   end
 
   @doc """

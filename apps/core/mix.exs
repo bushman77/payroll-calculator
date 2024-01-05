@@ -35,7 +35,8 @@ defmodule Core.MixProject do
       {:hackney, "~> 1.17"},
 
       # optional, required by JSON middleware
-      {:jason, ">= 1.0.0"}
+      {:jason, ">= 1.0.0"},
+      {:csv, "~> 3.2"}
     ]
   end
 end

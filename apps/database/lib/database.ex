@@ -1,4 +1,8 @@
 defmodule Database do
+  @moduledoc """
+  Only the Core module will have access to this
+  """
+
   use GenServer
 
   alias :mnesia, as: Mnesia
@@ -13,7 +17,7 @@ defmodule Database do
 
     create_table(Hours, :bag, [:full_name, :date, :shift_start, :shift_end, :hours, :rate, :notes])
 
-    create_table(Employee, :set, [:full_name, :struct])
+    # create_table(Employee, :set, [:full_name, :struct])
 
     {:ok,
      %{
@@ -37,16 +41,21 @@ defmodule Database do
   def delete_object(tuple), do: GenServer.cast(__MODULE__, {:delete_object, tuple})
   def info(), do: GenServer.call(__MODULE__, {:info})
   def insert(query), do: GenServer.cast(__MODULE__, {:insert, query})
+
+  @doc """
+  match/1 wrapper for :mnesia.match function
+  """
   def match(query), do: GenServer.call(Database, {:match, query})
   def table_info(table, :attributes), do: Mnesia.table_info(table, :attributes)
-
+  def select(query), do: GenServer.call(__MODULE__, {:select, query})
   @impl true
   def handle_call({:info}, _from, state) do
-    state = %{
-      tables: [
-        hours: :mnesia.table_info(Hours, :all),
-        employee: :mnesia.table_info(Employee, :all)
-      ]
+    %{
+      state
+      | tables: [
+          hours: :mnesia.table_info(Hours, :all),
+          employee: :mnesia.table_info(Employee, :all)
+        ]
     }
 
     {:reply, state, state}
@@ -64,9 +73,6 @@ defmodule Database do
     {:reply, Mnesia.transaction(data_to_read), state}
   end
 
-  @doc """
-  Database.match({Hours, "Bradley Anolik", :_, :_, :_, :_, :_})
-  """
   def handle_call({:match, query}, _from, state) do
     {:atomic, transaction} = Mnesia.transaction(fn -> Mnesia.match_object(query) end)
     {:reply, transaction, state}
@@ -74,7 +80,7 @@ defmodule Database do
 
   def handle_call({:all, module}, _from, state) do
     wild_pattern =
-      :mnesia.table_info(Employee, :all)[:wild_pattern]
+      :mnesia.table_info(module, :all)[:wild_pattern]
 
     {
       :reply,
@@ -93,8 +99,6 @@ defmodule Database do
   """
   @impl true
   def handle_cast({:insert, tuple}, state) do
-    tuple
-
     Mnesia.transaction(fn -> Mnesia.write(tuple) end)
 
     {:noreply, state}

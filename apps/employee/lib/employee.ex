@@ -36,14 +36,14 @@ defmodule Employee do
 
   def object, do: {Employee, :_, %__MODULE__{}}
 
-  def update(full_name, key, value) do
-    {_o, employee} =
-      Payroll.data().employees[String.to_atom(full_name)]
-      |> Map.from_struct()
-      |> Map.get_and_update(key, fn current_value -> {current_value, value} end)
-
-    Database.insert({Employee, full_name, struct(Employee, employee)})
-    Payroll.update(:employees, all())
+  def update(_full_name, _key, _value) do
+    # {_o, employee} =
+    #  Payroll.data().employees[String.to_atom(full_name)]
+    #  |> Map.from_struct()
+    #  |> Map.get_and_update(key, fn current_value -> {current_value, value} end)
+    # Core.Query.
+    # Database.insert({Employee, full_name, struct(Employee, employee)})
+    # Payroll.update(:employees, all())
   end
 
   @doc """

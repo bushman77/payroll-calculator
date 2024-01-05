@@ -7,7 +7,21 @@ defmodule Payroll.Umbrella.MixProject do
       version: "0.1.0",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      aliases: aliases()
+      aliases: aliases(),
+      releases: [
+        all_modules: [
+          include_executables_for: [:unix],
+          applications: [
+            runtime_tools: :permanent,
+            core: :permanent,
+            database: :permanent,
+            # employee: :permanent,
+            payroll: :permanent,
+            payroll_web: :permanent,
+            company: :permanent
+          ]
+        ]
+      ]
     ]
   end
 
