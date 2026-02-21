@@ -10,7 +10,7 @@ defmodule Employee.Application do
     children = [
       # Starts a worker by calling: Employee.Worker.start_link(arg)
       # {Employee.Worker, arg}
-      #{Employee, name: Employee}
+      # {Employee, name: Employee}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

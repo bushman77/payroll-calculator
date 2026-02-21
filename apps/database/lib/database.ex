@@ -1,112 +1,124 @@
 defmodule Database do
   @moduledoc """
-  Only the Core module will have access to this
+  Mnesia wrapper for the umbrella.
+
+  Goals:
+  - Never stop Mnesia during normal boot
+  - Create schema/tables only if missing
+  - Be safe to restart repeatedly (idempotent)
   """
 
   use GenServer
 
-  alias :mnesia, as: Mnesia
+  @tables [
+    {Employee, [attributes: [:full_name, :struct], type: :set]},
+    {Hours, [attributes: [:full_name, :date, :shift_start, :shift_end, :rate, :hours, :notes], type: :bag]}
+  ]
 
-  def start_link(opts), do: GenServer.start_link(__MODULE__, :ok, opts)
+  def start_link(opts) do
+    opts = Keyword.put_new(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, :ok, opts)
+  end
 
   @impl true
   def init(:ok) do
-    Mnesia.stop()
-    Mnesia.create_schema([node()])
-    Mnesia.start()
+    node = node()
 
-    create_table(Hours, :bag, [:full_name, :date, :shift_start, :shift_end, :hours, :rate, :notes])
+    ensure_schema(node)
+    ensure_started()
+    ensure_tables()
 
-    # create_table(Employee, :set, [:full_name, :struct])
-
-    {:ok,
-     %{
-       tables: [
-         hours: :mnesia.table_info(Hours, :all),
-         employee: :mnesia.table_info(Employee, :all)
-       ]
-     }}
+    {:ok, info()}
   end
 
-  def create_table(table, type, attributes) do
-    Mnesia.create_table(table,
-      type: type,
-      disc_copies: [Node.self()],
-      record_name: table,
-      attributes: attributes
-    )
-  end
+  # -----------------------------------------------------------------------------
+  # Public API (kept compatible with your existing calls)
+  # -----------------------------------------------------------------------------
 
-  def delete_table(table), do: Mnesia.delete_table(table)
-  def delete_object(tuple), do: GenServer.cast(__MODULE__, {:delete_object, tuple})
-  def info(), do: GenServer.call(__MODULE__, {:info})
-  def insert(query), do: GenServer.cast(__MODULE__, {:insert, query})
+  def insert(tuple), do: GenServer.cast(__MODULE__, {:insert, tuple})
+  def match(pattern), do: :mnesia.dirty_match_object(pattern)
+  def table_info(table, what), do: :mnesia.table_info(table, what)
 
-  @doc """
-  match/1 wrapper for :mnesia.match function
-  """
-  def match(query), do: GenServer.call(Database, {:match, query})
-  def table_info(table, :attributes), do: Mnesia.table_info(table, :attributes)
-  def select(query), do: GenServer.call(__MODULE__, {:select, query})
-  @impl true
-  def handle_call({:info}, _from, state) do
+  def info do
     %{
-      state
-      | tables: [
-          hours: :mnesia.table_info(Hours, :all),
-          employee: :mnesia.table_info(Employee, :all)
-        ]
-    }
-
-    {:reply, state, state}
-  end
-
-  @doc """
-  table headers:
-  query = {Hours, 1}
-  GenServer.call(Database, {:query, query})
-  """
-  @impl true
-  def handle_call({:query, query}, _from, state) do
-    data_to_read = fn -> Mnesia.read(query) end
-
-    {:reply, Mnesia.transaction(data_to_read), state}
-  end
-
-  def handle_call({:match, query}, _from, state) do
-    {:atomic, transaction} = Mnesia.transaction(fn -> Mnesia.match_object(query) end)
-    {:reply, transaction, state}
-  end
-
-  def handle_call({:all, module}, _from, state) do
-    wild_pattern =
-      :mnesia.table_info(module, :all)[:wild_pattern]
-
-    {
-      :reply,
-      Mnesia.transaction(fn -> :mnesia.match_object(wild_pattern) end),
-      state
+      node: node(),
+      dir: :mnesia.system_info(:directory),
+      running_db_nodes: :mnesia.system_info(:running_db_nodes),
+      tables: tables_info()
     }
   end
 
-  @doc """
-  employee_tuple = {Employee, "Full Name", %struct{}}
-  tuple = {Hours, 1, "John Doe", {2023, 8, 4}, 8, "Labourer", 25}
-  GenServer.cast(Database, {:insert, tuple})
-  [{Hours, 1, "John Doe", "2023-08-04", 8, "Labourer"}]
+  # -----------------------------------------------------------------------------
+  # GenServer handlers
+  # -----------------------------------------------------------------------------
 
-  GenServer.cast(Database, {:insert, {Hours, 1, "John Doe", {2023, 3, 24}, 24, "Labourer", 25}})
-  """
   @impl true
   def handle_cast({:insert, tuple}, state) do
-    Mnesia.transaction(fn -> Mnesia.write(tuple) end)
-
+    :mnesia.dirty_write(tuple)
     {:noreply, state}
   end
 
   @impl true
-  def handle_cast({:delete_object, tuple}, state) do
-    :mnesia.transaction(fn -> :mnesia.delete_object(Hours, tuple, :write) end)
-    {:noreply, state}
+  def handle_call({:getstate}, _from, state), do: {:reply, state, state}
+
+  # -----------------------------------------------------------------------------
+  # Boot helpers (idempotent)
+  # -----------------------------------------------------------------------------
+
+  defp ensure_schema(node) do
+    # If a schema exists, this returns {:error, {:already_exists, node}}
+    # which is fine. If it doesn't exist, it creates it.
+    case :mnesia.create_schema([node]) do
+      :ok -> :ok
+      {:error, {_, {:already_exists, _}}} -> :ok
+      {:error, {:already_exists, _}} -> :ok
+      {:error, reason} -> raise "Failed to create Mnesia schema: #{inspect(reason)}"
+    end
+  end
+
+  defp ensure_started do
+    case :mnesia.start() do
+      :ok -> :ok
+      {:error, {:already_started, :mnesia}} -> :ok
+      {:error, reason} -> raise "Failed to start Mnesia: #{inspect(reason)}"
+    end
+
+    # Ensure we can talk to it
+    :mnesia.wait_for_tables([:schema], 5_000)
+    :ok
+  end
+
+  defp ensure_tables do
+    Enum.each(@tables, fn {table, opts} ->
+      ensure_table(table, opts)
+    end)
+
+    tables = Enum.map(@tables, fn {t, _} -> t end)
+    :mnesia.wait_for_tables(tables, 10_000)
+    :ok
+  end
+
+  defp ensure_table(table, opts) do
+    case :mnesia.create_table(table, opts) do
+      {:atomic, :ok} ->
+        :ok
+
+      {:aborted, {:already_exists, ^table}} ->
+        :ok
+
+      {:aborted, reason} ->
+        raise "Failed to create table #{inspect(table)}: #{inspect(reason)}"
+    end
+  end
+
+  defp tables_info do
+    # Basic info for your existing patterns
+    Enum.reduce(@tables, %{}, fn {table, _}, acc ->
+      Map.put(acc, table, %{
+        attributes: :mnesia.table_info(table, :attributes),
+        wild_pattern: :mnesia.table_info(table, :wild_pattern),
+        type: :mnesia.table_info(table, :type)
+      })
+    end)
   end
 end

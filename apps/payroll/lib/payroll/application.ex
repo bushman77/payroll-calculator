@@ -13,9 +13,8 @@ defmodule Payroll.Application do
       # Start a worker by calling: Payroll.Worker.start_link(arg)
       # {Payroll.Worker, arg}
       {Payroll, name: Payroll},
-      {Database, name: Database},
-      {Company, name: Company},
-      #{Employee, name: Employee}
+      {Company, name: Company}
+      # {Employee, name: Employee}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Payroll.Supervisor)

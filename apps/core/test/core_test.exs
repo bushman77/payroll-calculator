@@ -14,9 +14,8 @@ defmodule CoreTest do
 
   test "Perform query" do
     Core.Query.lookup(Database, [])
-    |>IO.inspect
+    |> IO.inspect()
+
     assert true
   end
 end
-
-

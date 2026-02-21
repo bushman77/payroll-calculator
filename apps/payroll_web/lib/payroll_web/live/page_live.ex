@@ -1,39 +1,15 @@
-defmodule PayrollWeb.Components.Calendar do
-  use Surface.Component
+defmodule PayrollWeb.PageLive do
+  use PayrollWeb, :live_view
 
-  slot(default, required: true)
-
-  def render(assigns) do
-    ~F"""
-    <table class="border-double">
-      <thead>
-        <td class="w-1/6">Sunday</td>
-        <td class="w-1/6">Monday</td>
-        <td class="w-1/6">Tuesday</td>
-        <td class="w-1/6">Wednesday</td>
-        <td class="w-1/6">Thursday</td>
-        <td class="w-1/6">Friday</td>
-        <td class="w-1/6">Saturday</td>
-      </thead>
-      <tbody>
-        <tr>
-          <td>1</td>
-        </tr>
-      </tbody>
-    </table>
-    """
+  @impl true
+  def mount(_params, _session, socket) do
+    {:ok, socket}
   end
-end
 
-defmodule PageLive do
-  use Surface.LiveView
-  alias PayrollWeb.Components.Calendar
-
+  @impl true
   def render(assigns) do
-    ~F"""
-    <Calendar>
-      Hi there!
-    </Calendar>
+    ~H"""
+    placeholder
     """
   end
 end

@@ -3,8 +3,10 @@ defmodule DatabaseTest do
   doctest Database
 
   test "Database supervisor running?" do
-    pid = Process.whereis(Database)
-    |> is_pid()
+    pid =
+      Process.whereis(Database)
+      |> is_pid()
+
     assert pid
   end
 end
