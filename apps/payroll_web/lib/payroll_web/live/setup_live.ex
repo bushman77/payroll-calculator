@@ -213,9 +213,21 @@ defmodule PayrollWeb.SetupLive do
       |> add_err_if(data.name == "", :name, "required")
       |> add_err_if(data.province == "", :province, "required")
       |> add_err_if(not valid_iso_date?(data.anchor_payday), :anchor_payday, "must be YYYY-MM-DD")
-      |> add_err_if(bn != "" and not Regex.match?(~r/^\d{9}$/, bn), :business_number, "must be 9 digits")
-      |> add_err_if(rp != "" and not Regex.match?(~r/^\d{9}RP\d{4}$/i, rp), :payroll_account_rp, "format: #########RP####")
-      |> add_err_if(rt != "" and not Regex.match?(~r/^\d{9}RT\d{4}$/i, rt), :gst_account_rt, "format: #########RT####")
+      |> add_err_if(
+        bn != "" and not Regex.match?(~r/^\d{9}$/, bn),
+        :business_number,
+        "must be 9 digits"
+      )
+      |> add_err_if(
+        rp != "" and not Regex.match?(~r/^\d{9}RP\d{4}$/i, rp),
+        :payroll_account_rp,
+        "format: #########RP####"
+      )
+      |> add_err_if(
+        rt != "" and not Regex.match?(~r/^\d{9}RT\d{4}$/i, rt),
+        :gst_account_rt,
+        "format: #########RT####"
+      )
       |> add_err_if(phone != "" and not valid_phone?(phone), :phone, "invalid phone")
       |> add_err_if(email != "" and not valid_email?(email), :email, "invalid email")
 

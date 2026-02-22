@@ -1,30 +1,27 @@
 defmodule CoreTest do
   use ExUnit.Case, async: true
-  doctest Core
 
-  test "greets the world" do
-    assert Core.hello() == :world
+  test "company settings returns a map with required keys" do
+    settings = Core.company_settings()
+
+    assert is_map(settings)
+    assert is_binary(settings.name)
+    assert is_binary(settings.province)
+    assert settings.pay_frequency == :biweekly
+    assert is_binary(settings.anchor_payday)
   end
 
-  test "Database GenServer is running and responds to :getstate" do
-    assert is_pid(Process.whereis(Database))
-
-    state = Core.check_server(Database)
-    assert is_map(state)
-
-    # The Database state is `Database.info/0` output (map) in your current implementation
-    assert Map.has_key?(state, :node)
-    assert Map.has_key?(state, :dir)
-    assert Map.has_key?(state, :running_db_nodes)
-    assert Map.has_key?(state, :tables)
+  test "paydays_for_year returns 26 or 27 biweekly paydays" do
+    year = Date.utc_today().year
+    n = Core.paydays_for_year(year) |> length()
+    assert n in [26, 27]
   end
 
-  test "Database exposes table info via Database.table_info/2" do
-    # These tables are created by Database on boot
-    assert is_list(Database.table_info(Employee, :attributes))
-    assert is_tuple(Database.table_info(Employee, :wild_pattern))
-
-    assert is_list(Database.table_info(Hours, :attributes))
-    assert is_tuple(Database.table_info(Hours, :wild_pattern))
+  test "current_period returns a period map with start/cutoff/payday" do
+    period = Core.current_period(Date.utc_today())
+    assert is_map(period)
+    assert Map.has_key?(period, :start)
+    assert Map.has_key?(period, :cutoff)
+    assert Map.has_key?(period, :payday)
   end
 end

@@ -30,11 +30,7 @@ defmodule PayrollWeb.EmployeesLive do
        |> assign(:form, to_form(data, as: :emp))
        |> assign(:errors, errors)}
     else
-      given = Map.get(data, "givenname", "")
-      sur = Map.get(data, "surname", "")
-      rate = parse_rate(Map.get(data, "hourly_rate", ""))
-
-      case Employee.create(given, sur, rate) do
+      case Employee.create(data) do
         {:ok, _full_name} ->
           {:noreply,
            socket
@@ -45,8 +41,7 @@ defmodule PayrollWeb.EmployeesLive do
 
         {:error, reason} ->
           {:noreply,
-           socket
-           |> assign(:errors, Map.put(errors, :form, "create failed: #{inspect(reason)}"))}
+           socket |> assign(:errors, Map.put(errors, :form, "create failed: #{inspect(reason)}"))}
       end
     end
   end
@@ -68,7 +63,7 @@ defmodule PayrollWeb.EmployeesLive do
       <div class="flex items-start justify-between gap-4">
         <div>
           <h1 class="text-2xl font-semibold">Employees</h1>
-          <p class="text-sm text-gray-600">Add employees and set default hourly rates.</p>
+          <p class="text-sm text-gray-600">Add employees and maintain contact info.</p>
         </div>
 
         <a href="/app" class="px-3 py-2 rounded border text-sm">
@@ -95,23 +90,56 @@ defmodule PayrollWeb.EmployeesLive do
 
             <div>
               <label class="block text-sm font-medium">Hourly rate</label>
-              <input
-                name="emp[hourly_rate]"
-                value={@form[:hourly_rate].value}
-                class="mt-1 w-full border rounded p-2"
-                placeholder="25.00"
-                inputmode="decimal"
-              />
+              <input name="emp[hourly_rate]" value={@form[:hourly_rate].value} class="mt-1 w-full border rounded p-2" placeholder="25.00" inputmode="decimal" />
               <%= error_line(@errors, :hourly_rate) %>
+            </div>
+
+            <hr class="my-2" />
+
+            <div>
+              <label class="block text-sm font-medium">Address line 1</label>
+              <input name="emp[address1]" value={@form[:address1].value} class="mt-1 w-full border rounded p-2" />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium">City</label>
+              <input name="emp[city]" value={@form[:city].value} class="mt-1 w-full border rounded p-2" />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium">Province</label>
+              <input name="emp[province]" value={@form[:province].value} class="mt-1 w-full border rounded p-2" placeholder="BC" />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium">Postal code</label>
+              <input name="emp[postalcode]" value={@form[:postalcode].value} class="mt-1 w-full border rounded p-2" placeholder="V1V 1V1" />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium">Phone</label>
+              <input name="emp[home_phone]" value={@form[:home_phone].value} class="mt-1 w-full border rounded p-2" inputmode="tel" />
+              <%= error_line(@errors, :home_phone) %>
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium">Email</label>
+              <input name="emp[email]" value={@form[:email].value} class="mt-1 w-full border rounded p-2" inputmode="email" />
+              <%= error_line(@errors, :email) %>
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium">SIN</label>
+              <input name="emp[sin]" value={@form[:sin].value} class="mt-1 w-full border rounded p-2" inputmode="numeric" placeholder="123456789" />
+              <%= error_line(@errors, :sin) %>
+              <p class="mt-1 text-xs text-gray-500">Stored for payroll. Not shown in lists.</p>
             </div>
           </div>
 
           <%= error_line(@errors, :form) %>
 
           <div class="flex gap-3 pt-2">
-            <button type="submit" class="px-4 py-2 rounded bg-black text-white">
-              Add
-            </button>
+            <button type="submit" class="px-4 py-2 rounded bg-black text-white">Add</button>
           </div>
         </.form>
       </div>
@@ -133,14 +161,13 @@ defmodule PayrollWeb.EmployeesLive do
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  phx-click="deactivate"
-                  phx-value-name={full_name}
-                  class="px-3 py-2 rounded border text-sm"
-                >
-                  Deactivate
-                </button>
+                <div class="flex gap-2">
+                  <a href={"/employees/#{URI.encode(full_name)}"} class="px-3 py-2 rounded border text-sm">Edit</a>
+
+                  <button type="button" phx-click="deactivate" phx-value-name={full_name} class="px-3 py-2 rounded border text-sm">
+                    Deactivate
+                  </button>
+                </div>
               </div>
             <% end %>
           <% end %>
@@ -153,12 +180,21 @@ defmodule PayrollWeb.EmployeesLive do
   # ----------------------------
   # helpers
   # ----------------------------
-  defp load_employees do
-    Employee.active()
-  end
+  defp load_employees, do: Employee.active()
 
   defp default_params do
-    %{"givenname" => "", "surname" => "", "hourly_rate" => ""}
+    %{
+      "givenname" => "",
+      "surname" => "",
+      "hourly_rate" => "",
+      "address1" => "",
+      "city" => "",
+      "province" => "",
+      "postalcode" => "",
+      "home_phone" => "",
+      "email" => "",
+      "sin" => ""
+    }
   end
 
   defp validate_params(params) do
@@ -166,14 +202,33 @@ defmodule PayrollWeb.EmployeesLive do
     sur = (params["surname"] || "") |> String.trim()
     rate_s = (params["hourly_rate"] || "") |> String.trim()
 
+    phone = (params["home_phone"] || "") |> String.trim()
+    email = (params["email"] || "") |> String.trim()
+    sin = (params["sin"] || "") |> String.trim()
+
     errors =
       %{}
       |> add_err_if(given == "", :givenname, "required")
       |> add_err_if(sur == "", :surname, "required")
       |> add_err_if(rate_s == "", :hourly_rate, "required")
-      |> add_err_if(rate_s != "" and not valid_rate?(rate_s), :hourly_rate, "must be a number >= 0")
+      |> add_err_if(
+        rate_s != "" and not valid_rate?(rate_s),
+        :hourly_rate,
+        "must be a number >= 0"
+      )
+      |> add_err_if(phone != "" and not valid_phone?(phone), :home_phone, "invalid phone")
+      |> add_err_if(email != "" and not valid_email?(email), :email, "invalid email")
+      |> add_err_if(sin != "" and not Regex.match?(~r/^\d{9}$/, sin), :sin, "must be 9 digits")
 
-    data = %{"givenname" => given, "surname" => sur, "hourly_rate" => rate_s}
+    data =
+      params
+      |> Map.put("givenname", given)
+      |> Map.put("surname", sur)
+      |> Map.put("hourly_rate", rate_s)
+      |> Map.put("home_phone", phone)
+      |> Map.put("email", email)
+      |> Map.put("sin", sin)
+
     {data, errors}
   end
 
@@ -184,12 +239,8 @@ defmodule PayrollWeb.EmployeesLive do
     end
   end
 
-  defp parse_rate(s) do
-    case Float.parse(s) do
-      {n, _} -> n
-      _ -> 0.0
-    end
-  end
+  defp valid_phone?(s), do: Regex.match?(~r/^[0-9\+\-\(\)\s\.xextEXT]{7,}$/u, s)
+  defp valid_email?(s), do: Regex.match?(~r/^[^\s]+@[^\s]+\.[^\s]+$/u, s)
 
   defp add_err_if(errors, true, field, msg), do: Map.put(errors, field, msg)
   defp add_err_if(errors, false, _field, _msg), do: errors

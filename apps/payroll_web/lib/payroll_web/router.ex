@@ -20,6 +20,8 @@ defmodule PayrollWeb.Router do
     live("/setup", SetupLive)
     live("/app", AppLive)
     live("/employees", EmployeesLive)
+    live("/employees/:full_name", EmployeeEditLive)
+    live("/hours", HoursLive)
   end
 
   if Mix.env() in [:dev, :test] do
