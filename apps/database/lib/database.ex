@@ -5,14 +5,23 @@ defmodule Database do
   Goals:
   - Never stop Mnesia during normal boot
   - Create schema/tables only if missing
+  - Persist data across restarts (disc_copies)
+  - If tables already exist as ram_copies, migrate them to disc_copies
   - Be safe to restart repeatedly (idempotent)
   """
 
   use GenServer
 
+  @compile {:no_warn_undefined, :mnesia}
+
   @tables [
     {Employee, [attributes: [:full_name, :struct], type: :set]},
-    {Hours, [attributes: [:full_name, :date, :shift_start, :shift_end, :rate, :hours, :notes], type: :bag]}
+    {Hours,
+     [
+       attributes: [:full_name, :date, :shift_start, :shift_end, :rate, :hours, :notes],
+       type: :bag
+     ]},
+    {CompanySettings, [attributes: [:id, :settings], type: :set]}
   ]
 
   def start_link(opts) do
@@ -22,19 +31,18 @@ defmodule Database do
 
   @impl true
   def init(:ok) do
-    node = node()
+    n = node()
 
-    ensure_schema(node)
+    ensure_schema(n)
     ensure_started()
-    ensure_tables()
+    ensure_tables(n)
 
     {:ok, info()}
   end
 
   # -----------------------------------------------------------------------------
-  # Public API (kept compatible with your existing calls)
+  # Public API
   # -----------------------------------------------------------------------------
-
   def insert(tuple), do: GenServer.cast(__MODULE__, {:insert, tuple})
   def match(pattern), do: :mnesia.dirty_match_object(pattern)
   def table_info(table, what), do: :mnesia.table_info(table, what)
@@ -51,7 +59,6 @@ defmodule Database do
   # -----------------------------------------------------------------------------
   # GenServer handlers
   # -----------------------------------------------------------------------------
-
   @impl true
   def handle_cast({:insert, tuple}, state) do
     :mnesia.dirty_write(tuple)
@@ -64,11 +71,8 @@ defmodule Database do
   # -----------------------------------------------------------------------------
   # Boot helpers (idempotent)
   # -----------------------------------------------------------------------------
-
-  defp ensure_schema(node) do
-    # If a schema exists, this returns {:error, {:already_exists, node}}
-    # which is fine. If it doesn't exist, it creates it.
-    case :mnesia.create_schema([node]) do
+  defp ensure_schema(n) do
+    case :mnesia.create_schema([n]) do
       :ok -> :ok
       {:error, {_, {:already_exists, _}}} -> :ok
       {:error, {:already_exists, _}} -> :ok
@@ -83,14 +87,13 @@ defmodule Database do
       {:error, reason} -> raise "Failed to start Mnesia: #{inspect(reason)}"
     end
 
-    # Ensure we can talk to it
     :mnesia.wait_for_tables([:schema], 5_000)
     :ok
   end
 
-  defp ensure_tables do
+  defp ensure_tables(n) do
     Enum.each(@tables, fn {table, opts} ->
-      ensure_table(table, opts)
+      ensure_table(n, table, opts)
     end)
 
     tables = Enum.map(@tables, fn {t, _} -> t end)
@@ -98,26 +101,47 @@ defmodule Database do
     :ok
   end
 
-  defp ensure_table(table, opts) do
+  defp ensure_table(n, table, opts) do
+    # Always prefer disk persistence for local single-node usage
+    opts = Keyword.put_new(opts, :disc_copies, [n])
+
     case :mnesia.create_table(table, opts) do
       {:atomic, :ok} ->
         :ok
 
       {:aborted, {:already_exists, ^table}} ->
-        :ok
+        migrate_to_disc_if_needed(n, table)
 
       {:aborted, reason} ->
         raise "Failed to create table #{inspect(table)}: #{inspect(reason)}"
     end
   end
 
+  defp migrate_to_disc_if_needed(n, table) do
+    case :mnesia.table_info(table, :storage_type) do
+      :disc_copies ->
+        :ok
+
+      :ram_copies ->
+        # Convert existing RAM table to disk-backed
+        case :mnesia.change_table_copy_type(table, n, :disc_copies) do
+          {:atomic, :ok} -> :ok
+          {:aborted, reason} -> raise "Failed to migrate #{inspect(table)} to disc_copies: #{inspect(reason)}"
+        end
+
+      other ->
+        # For completeness; you could handle :disc_only_copies later if you want.
+        {:error, {:unexpected_storage_type, other}}
+    end
+  end
+
   defp tables_info do
-    # Basic info for your existing patterns
     Enum.reduce(@tables, %{}, fn {table, _}, acc ->
       Map.put(acc, table, %{
         attributes: :mnesia.table_info(table, :attributes),
         wild_pattern: :mnesia.table_info(table, :wild_pattern),
-        type: :mnesia.table_info(table, :type)
+        type: :mnesia.table_info(table, :type),
+        storage_type: :mnesia.table_info(table, :storage_type)
       })
     end)
   end

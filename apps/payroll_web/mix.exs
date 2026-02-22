@@ -39,14 +39,12 @@ defmodule PayrollWeb.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.1"},
       {:gettext, "~> 0.26"},
-
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.4", runtime: Mix.env() == :dev},
-
       {:payroll, in_umbrella: true},
+      {:employee, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:plug_cowboy, "~> 2.7"},
-
       {:lazy_html, ">= 0.0.0", only: :test}
     ]
   end

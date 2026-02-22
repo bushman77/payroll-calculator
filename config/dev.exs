@@ -8,7 +8,7 @@ config :payroll_web, PayrollWeb.Endpoint,
   secret_key_base: "YhFildNU1wkBsMfJGVIH/WoNY8WLJ4xe10VFezUvBnagbKSaGMNUwYVCDaSq82TQ",
   watchers: [],
   live_reload: []
- 
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :console, format: "[$level] $message\n"
 

@@ -1,80 +1,121 @@
 defmodule Employee do
   @moduledoc """
-  Documentation for `Employee`.
-  @fields list of keyvalues describing an Employee object
+  Employee domain functions (library module).
+
+  Storage (Mnesia via Database app):
+    {Employee, full_name :: String.t(), employee_struct :: %Employee{}}
+
+  v1 key: full_name (string)
   """
-  @pattern {Employee, "John Doe", :_}
+
   defstruct Core.struct(Employee)
-  use GenServer
 
-  def start_link(opts) do
-    GenServer.start_link(__MODULE__, :ok, opts)
+  @type t :: %__MODULE__{}
+
+  # ----------------------------
+  # Read
+  # ----------------------------
+  @spec all() :: [{String.t(), t()}]
+  def all do
+    Database.match({Employee, :_, :_})
+    |> Enum.map(fn {Employee, full_name, emp} -> {full_name, normalize(emp)} end)
+    |> Enum.sort_by(fn {full_name, _} -> String.downcase(full_name) end)
   end
 
-  @impl true
-  def init(:ok) do
-    data =
-      GenServer.call(Database, {:all, Employee})
-      |> Core.Query.update_state()
-
-    GenServer.cast(Payroll, {:init, Employee, data})
-    {:ok, %{pattern: @pattern, result: []}}
+  @spec active() :: [{String.t(), t()}]
+  def active do
+    all()
+    |> Enum.filter(fn {_name, emp} -> Map.get(emp, :status, :active) == :active end)
   end
 
-  ## PUBLIC FUNCTIONS
-  def all, do: Core.Query.update_state(GenServer.call(Database, {:all, Employee}))
-  def attributes, do: [attributes: [:full_name, :struct]]
-
-  @doc """
-  Create a new user
-  """
-  def new(first, last) do
-    Database.insert(
-      {Employee, full_name(first, last), struct(%Employee{}, %{givenname: first, surname: last})}
-    )
+  @spec get(String.t()) :: {:ok, t()} | {:error, :not_found}
+  def get(full_name) when is_binary(full_name) do
+    case Database.match({Employee, full_name, :_}) do
+      [{Employee, ^full_name, emp}] -> {:ok, normalize(emp)}
+      [] -> {:error, :not_found}
+    end
   end
 
-  def object, do: {Employee, :_, %__MODULE__{}}
+  # ----------------------------
+  # Create
+  # ----------------------------
+  @spec create(String.t(), String.t(), number()) :: {:ok, String.t()} | {:error, term()}
+  def create(givenname, surname, hourly_rate \\ 0.0)
+      when is_binary(givenname) and is_binary(surname) and is_number(hourly_rate) do
+    givenname = String.trim(givenname)
+    surname = String.trim(surname)
 
-  def update(_full_name, _key, _value) do
-    # {_o, employee} =
-    #  Payroll.data().employees[String.to_atom(full_name)]
-    #  |> Map.from_struct()
-    #  |> Map.get_and_update(key, fn current_value -> {current_value, value} end)
-    # Core.Query.
-    # Database.insert({Employee, full_name, struct(Employee, employee)})
-    # Payroll.update(:employees, all())
+    cond do
+      givenname == "" or surname == "" ->
+        {:error, :name_required}
+
+      hourly_rate < 0 ->
+        {:error, :invalid_rate}
+
+      true ->
+        full_name = full_name(givenname, surname)
+
+        emp =
+          struct(%__MODULE__{}, %{
+            givenname: givenname,
+            surname: surname,
+            hourly_rate: hourly_rate * 1.0,
+            status: :active
+          })
+
+        Database.insert({Employee, full_name, emp})
+        {:ok, full_name}
+    end
   end
 
-  @doc """
-  get_state/0
-  returns the current state of this modules genserver
+  # ----------------------------
+  # Update
+  # ----------------------------
+  @spec set_rate(String.t(), number()) :: {:ok, t()} | {:error, term()}
+  def set_rate(full_name, hourly_rate) when is_binary(full_name) and is_number(hourly_rate) do
+    cond do
+      hourly_rate < 0 ->
+        {:error, :invalid_rate}
 
-  """
-  def get_state, do: GenServer.call(__MODULE__, {:get_state})
+      true ->
+        with {:ok, emp} <- get(full_name) do
+          updated = Map.put(emp, :hourly_rate, hourly_rate * 1.0)
+          Database.insert({Employee, full_name, updated})
+          {:ok, updated}
+        end
+    end
+  end
 
-  ## HANDLER FUNCTIONS
-  ### CALL BACKS - SYNCRONOUS calls
-  #   WAIT FOR PROCESS TO RESPOND BACK
-  @impl true
-  def handle_call({:get_state}, _from, state), do: {:reply, state, state}
+  @spec deactivate(String.t()) :: {:ok, t()} | {:error, term()}
+  def deactivate(full_name) when is_binary(full_name) do
+    with {:ok, emp} <- get(full_name) do
+      updated = Map.put(emp, :status, :inactive)
+      Database.insert({Employee, full_name, updated})
+      {:ok, updated}
+    end
+  end
 
-  @impl true
-  def handle_call({:list_all}, _from, state), do: {:reply, state, state}
+  @spec activate(String.t()) :: {:ok, t()} | {:error, term()}
+  def activate(full_name) when is_binary(full_name) do
+    with {:ok, emp} <- get(full_name) do
+      updated = Map.put(emp, :status, :active)
+      Database.insert({Employee, full_name, updated})
+      {:ok, updated}
+    end
+  end
 
-  ## CASTINGS
-  #  SEND MESSAGE TO PROCESS AND - ASYNCRONOUS
-  #  DO NOT WAIT FOR RESPONSE
-  defp full_name(first, last), do: first <> " " <> last
+  # ----------------------------
+  # Helpers
+  # ----------------------------
+  defp full_name(givenname, surname), do: givenname <> " " <> surname
 
-  @doc """
-  Hello world.
+  # Normalize any old stored value into %Employee{}
+  defp normalize(%__MODULE__{} = emp), do: emp
 
-  ## Examples
+  defp normalize(map) when is_map(map) do
+    # If older records were stored as plain maps, coerce into struct
+    struct(%__MODULE__{}, Map.merge(Map.from_struct(struct(%__MODULE__{})), map))
+  end
 
-      iex> Employee.hello()
-      :world
-
-  """
-  def hello, do: :world
+  defp normalize(other), do: other
 end

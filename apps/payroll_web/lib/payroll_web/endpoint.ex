@@ -9,8 +9,7 @@ defmodule PayrollWeb.Endpoint do
     signing_salt: "OnN63dBf"
   ]
 
-  socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]]
+  socket "/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]]
 
   # Serve at "/" the static files from "priv/static" directory.
   plug Plug.Static,
@@ -18,7 +17,6 @@ defmodule PayrollWeb.Endpoint do
     from: :payroll_web,
     gzip: false,
     only: ~w(assets fonts images favicon.ico robots.txt)
-
 
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
