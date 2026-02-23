@@ -1,10 +1,10 @@
 defmodule PayrollWeb.HoursLive do
   use PayrollWeb, :live_view
 
-  alias PayrollWeb.HoursLive.RecentEntriesSection
   alias PayrollWeb.HoursLive.AddEntrySection
   alias PayrollWeb.HoursLive.EmployeeSection
   alias PayrollWeb.HoursLive.Header
+  alias PayrollWeb.HoursLive.RecentEntriesSection
 
   @minutes ~w(00 05 10 15 20 25 30 35 40 45 50 55)
 
@@ -22,8 +22,17 @@ defmodule PayrollWeb.HoursLive do
 
     form_params = default_params(selected)
 
+    {shift_start, shift_end, hours} =
+      derive_times_and_hours(
+        form_params["start_hour"],
+        form_params["start_min"],
+        form_params["end_hour"],
+        form_params["end_min"]
+      )
+
     {:ok,
      socket
+     |> assign(:rev, 0)
      |> assign(:minutes, @minutes)
      |> assign(:hours_options, hours_options())
      |> assign(:employees, employees)
@@ -31,6 +40,13 @@ defmodule PayrollWeb.HoursLive do
      |> assign(:entries, load_entries(selected))
      |> assign(:summary, load_summary(selected))
      |> assign(:errors, %{})
+     |> assign(:start_hour, form_params["start_hour"])
+     |> assign(:start_min, form_params["start_min"])
+     |> assign(:end_hour, form_params["end_hour"])
+     |> assign(:end_min, form_params["end_min"])
+     |> assign(:shift_start, shift_start)
+     |> assign(:shift_end, shift_end)
+     |> assign(:hours_text, hours)
      |> assign(:form, to_form(form_params, as: :h))}
   end
 
@@ -38,56 +54,123 @@ defmodule PayrollWeb.HoursLive do
   def handle_event("select_employee", %{"employee" => full_name}, socket) do
     form_params = default_params(full_name)
 
+    {shift_start, shift_end, hours} =
+      derive_times_and_hours(
+        form_params["start_hour"],
+        form_params["start_min"],
+        form_params["end_hour"],
+        form_params["end_min"]
+      )
+
     {:noreply,
      socket
      |> assign(:selected, full_name)
      |> assign(:entries, load_entries(full_name))
      |> assign(:summary, load_summary(full_name))
      |> assign(:errors, %{})
+     |> assign(:start_hour, form_params["start_hour"])
+     |> assign(:start_min, form_params["start_min"])
+     |> assign(:end_hour, form_params["end_hour"])
+     |> assign(:end_min, form_params["end_min"])
+     |> assign(:shift_start, shift_start)
+     |> assign(:shift_end, shift_end)
+     |> assign(:hours_text, hours)
      |> assign(:form, to_form(form_params, as: :h))}
   end
 
+  # Controlled time pickers: supports both payload formats (map or querystring)
+  @impl true
+  def handle_event("pick_time", %{"_target" => ["h", field]} = params, socket) do
+    h =
+      cond do
+        is_map(params["h"]) ->
+          params["h"]
+
+        is_binary(params["value"]) ->
+          Plug.Conn.Query.decode(params["value"])["h"] || %{}
+
+        true ->
+          %{}
+      end
+
+    value = pad2(Map.get(h, field, ""))
+
+    socket =
+      case field do
+        "start_hour" -> assign(socket, :start_hour, value)
+        "start_min" -> assign(socket, :start_min, value)
+        "end_hour" -> assign(socket, :end_hour, value)
+        "end_min" -> assign(socket, :end_min, value)
+        _ -> socket
+      end
+
+    {shift_start, shift_end, hours} =
+      derive_times_and_hours(
+        socket.assigns.start_hour,
+        socket.assigns.start_min,
+        socket.assigns.end_hour,
+        socket.assigns.end_min
+      )
+
+    # Uncomment if you want server-side proof:
+    # IO.inspect({field, value, shift_start, shift_end, hours}, label: "PICK_DERIVED")
+
+    socket = update(socket, :rev, &(&1 + 1))
+
+    {:noreply,
+     socket
+     |> assign(:shift_start, shift_start)
+     |> assign(:shift_end, shift_end)
+     |> assign(:hours_text, hours)
+     |> refresh_form_hidden_times()}
+  end
+
+  # Date/rate/notes validation only (no time logic here)
   @impl true
   def handle_event("validate", %{"h" => params}, socket) do
-    params = normalize_time_fields(params)
-    params = put_shift_times(params)
-    params = put_auto_hours(params)
+    merged = Map.merge(socket.assigns.form.params, params)
 
-    {data, errors} = validate_params(params, socket.assigns.selected)
+    {_, errors} = validate_params(merged, socket.assigns.selected, socket.assigns.hours_text)
 
     {:noreply,
      socket
      |> assign(:errors, errors)
-     |> assign(:form, to_form(data, as: :h))}
+     |> assign(:form, to_form(merged, as: :h))}
   end
 
   @impl true
   def handle_event("save", %{"h" => params}, socket) do
-    params = normalize_time_fields(params)
-    params = put_shift_times(params)
-    params = put_auto_hours(params)
+    merged = Map.merge(socket.assigns.form.params, params)
 
-    {data, errors} = validate_params(params, socket.assigns.selected)
+    {_, errors} = validate_params(merged, socket.assigns.selected, socket.assigns.hours_text)
 
     if map_size(errors) > 0 do
       {:noreply,
        socket
        |> assign(:errors, errors)
-       |> assign(:form, to_form(data, as: :h))}
+       |> assign(:form, to_form(merged, as: :h))}
     else
       :ok =
         Core.add_hours_entry(%{
-          full_name: data["full_name"],
-          date: data["date"],
-          shift_start: data["shift_start"],
-          shift_end: data["shift_end"],
-          rate: parse_float!(data["rate"]),
-          hours: parse_float!(data["hours"]),
-          notes: data["notes"]
+          full_name: socket.assigns.selected,
+          date: (merged["date"] || "") |> String.trim(),
+          shift_start: socket.assigns.shift_start,
+          shift_end: socket.assigns.shift_end,
+          rate: parse_float!(merged["rate"]),
+          hours: parse_float!(socket.assigns.hours_text),
+          notes: (merged["notes"] || "") |> to_string()
         })
 
       full_name = socket.assigns.selected
       fresh = default_params(full_name)
+
+      {shift_start, shift_end, hours} =
+        derive_times_and_hours(
+          fresh["start_hour"],
+          fresh["start_min"],
+          fresh["end_hour"],
+          fresh["end_min"]
+        )
 
       {:noreply,
        socket
@@ -95,6 +178,13 @@ defmodule PayrollWeb.HoursLive do
        |> assign(:entries, load_entries(full_name))
        |> assign(:summary, load_summary(full_name))
        |> assign(:errors, %{})
+       |> assign(:start_hour, fresh["start_hour"])
+       |> assign(:start_min, fresh["start_min"])
+       |> assign(:end_hour, fresh["end_hour"])
+       |> assign(:end_min, fresh["end_min"])
+       |> assign(:shift_start, shift_start)
+       |> assign(:shift_end, shift_end)
+       |> assign(:hours_text, hours)
        |> assign(:form, to_form(fresh, as: :h))}
     end
   end
@@ -103,6 +193,14 @@ defmodule PayrollWeb.HoursLive do
   def render(assigns) do
     ~H"""
     <div class="p-6 max-w-xl mx-auto space-y-4">
+      <p class="text-xs text-red-600">
+        REV=<%= @rev %>
+        start_hour=<%= @start_hour %>
+        start=<%= @shift_start %>
+        end=<%= @shift_end %>
+        hours=<%= @hours_text %>
+      </p>
+
       <Header.render title="Hours" subtitle="Times auto-calc hours (hours is read-only)." back_href="/app" />
 
       <EmployeeSection.render employees={@employees} selected={@selected} summary={@summary} />
@@ -113,6 +211,13 @@ defmodule PayrollWeb.HoursLive do
           errors={@errors}
           minutes={@minutes}
           hours_options={@hours_options}
+          start_hour={@start_hour}
+          start_min={@start_min}
+          end_hour={@end_hour}
+          end_min={@end_min}
+          shift_start={@shift_start}
+          shift_end={@shift_end}
+          hours_text={@hours_text}
         />
 
         <RecentEntriesSection.render entries={@entries} />
@@ -122,6 +227,38 @@ defmodule PayrollWeb.HoursLive do
   end
 
   # ---------------- helpers ----------------
+
+  defp refresh_form_hidden_times(socket) do
+    merged =
+      socket.assigns.form.params
+      |> Map.put("start_hour", socket.assigns.start_hour)
+      |> Map.put("start_min", socket.assigns.start_min)
+      |> Map.put("end_hour", socket.assigns.end_hour)
+      |> Map.put("end_min", socket.assigns.end_min)
+      |> Map.put("shift_start", socket.assigns.shift_start)
+      |> Map.put("shift_end", socket.assigns.shift_end)
+      |> Map.put("hours", socket.assigns.hours_text)
+
+    assign(socket, :form, to_form(merged, as: :h))
+  end
+
+  defp derive_times_and_hours(sh, sm, eh, em) do
+    sh = pad2(sh || "07")
+    sm = pad2(sm || "00")
+    eh = pad2(eh || "15")
+    em = pad2(em || "00")
+
+    shift_start = "#{sh}:#{sm}"
+    shift_end = "#{eh}:#{em}"
+
+    hours =
+      case minutes_between(shift_start, shift_end) do
+        {:ok, mins} when mins > 0 -> :erlang.float_to_binary(mins / 60.0, decimals: 2)
+        _ -> ""
+      end
+
+    {shift_start, shift_end, hours}
+  end
 
   defp hours_options, do: for(h <- 0..23, do: String.pad_leading("#{h}", 2, "0"))
 
@@ -147,39 +284,6 @@ defmodule PayrollWeb.HoursLive do
     }
   end
 
-  defp normalize_time_fields(params) do
-    params
-    |> Map.put("start_hour", pad2(Map.get(params, "start_hour", "07")))
-    |> Map.put("start_min", pad2(Map.get(params, "start_min", "00")))
-    |> Map.put("end_hour", pad2(Map.get(params, "end_hour", "15")))
-    |> Map.put("end_min", pad2(Map.get(params, "end_min", "00")))
-  end
-
-  defp put_shift_times(params) do
-    start = "#{params["start_hour"]}:#{params["start_min"]}"
-    endt = "#{params["end_hour"]}:#{params["end_min"]}"
-
-    params
-    |> Map.put("shift_start", start)
-    |> Map.put("shift_end", endt)
-  end
-
-  defp put_auto_hours(params) do
-    start_s = params["shift_start"] || ""
-    end_s = params["shift_end"] || ""
-
-    hours =
-      case minutes_between(start_s, end_s) do
-        {:ok, mins} when mins > 0 ->
-          :erlang.float_to_binary(mins / 60.0, decimals: 2)
-
-        _ ->
-          ""
-      end
-
-    Map.put(params, "hours", hours)
-  end
-
   defp minutes_between(start_s, end_s) do
     with {:ok, st} <- parse_hhmm(start_s),
          {:ok, en} <- parse_hhmm(end_s) do
@@ -202,38 +306,19 @@ defmodule PayrollWeb.HoursLive do
 
   defp parse_hhmm(_), do: :error
 
-  defp validate_params(params, selected_full_name) do
+  defp validate_params(params, selected_full_name, hours_text) do
     full_name = (params["full_name"] || selected_full_name || "") |> String.trim()
     date = (params["date"] || "") |> String.trim()
-    shift_start = (params["shift_start"] || "") |> String.trim()
-    shift_end = (params["shift_end"] || "") |> String.trim()
-    hours = (params["hours"] || "") |> String.trim()
     rate = (params["rate"] || "") |> String.trim()
 
     errors =
       %{}
       |> add_err_if(full_name == "", :full_name, "select an employee")
       |> add_err_if(not valid_iso_date?(date), :date, "must be YYYY-MM-DD")
-      |> add_err_if(
-        minutes_between(shift_start, shift_end) in [:error, {:ok, 0}] or
-          not end_after_start?(shift_start, shift_end),
-        :shift_time,
-        "end must be after start"
-      )
-      |> add_err_if(hours == "", :hours, "hours could not be calculated")
+      |> add_err_if(hours_text in [nil, ""], :hours, "hours could not be calculated")
       |> add_err_if(rate == "" or not valid_float_nonneg?(rate), :rate, "must be a number >= 0")
 
-    data =
-      params
-      |> Map.put("full_name", full_name)
-      |> Map.put("date", date)
-      |> Map.put("shift_start", shift_start)
-      |> Map.put("shift_end", shift_end)
-      |> Map.put("hours", hours)
-      |> Map.put("rate", rate)
-      |> Map.put_new("notes", "")
-
-    {data, errors}
+    {params, errors}
   end
 
   defp valid_iso_date?(s), do: match?({:ok, _}, Date.from_iso8601(s))
@@ -241,13 +326,6 @@ defmodule PayrollWeb.HoursLive do
   defp valid_float_nonneg?(s) do
     case Float.parse(s) do
       {n, ""} when n >= 0 -> true
-      _ -> false
-    end
-  end
-
-  defp end_after_start?(start_s, end_s) do
-    case minutes_between(start_s, end_s) do
-      {:ok, mins} when mins > 0 -> true
       _ -> false
     end
   end

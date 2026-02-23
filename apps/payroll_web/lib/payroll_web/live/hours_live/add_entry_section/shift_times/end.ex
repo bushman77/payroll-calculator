@@ -1,17 +1,20 @@
 defmodule PayrollWeb.HoursLive.AddEntrySection.ShiftTimes.End do
   use Phoenix.Component
 
-  attr :form, :any, required: true
-  attr :errors, :map, required: true
   attr :minutes, :list, required: true
   attr :hours_options, :list, required: true
+  attr :errors, :map, required: true
+
+  attr :end_hour, :string, required: true
+  attr :end_min, :string, required: true
+  attr :shift_end, :string, required: true
 
   def render(assigns) do
     ~H"""
     <div class="border rounded p-3 bg-white space-y-2">
       <div class="flex items-center justify-between">
         <div class="text-sm font-medium">End</div>
-        <div class="text-sm text-gray-700 font-medium"><%= @form.params["shift_end"] || @form[:shift_end].value %></div>
+        <div class="text-sm text-gray-700 font-medium"><%= @shift_end %></div>
       </div>
 
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
@@ -19,11 +22,11 @@ defmodule PayrollWeb.HoursLive.AddEntrySection.ShiftTimes.End do
           <label class="block text-xs text-gray-600">Hour</label>
           <select
             name="h[end_hour]"
-            value={@form.params["end_hour"] || @form[:end_hour].value}
+            phx-change="pick_time"
             class="mt-1 w-full border rounded p-2 text-base bg-white text-black"
           >
             <%= for hh <- @hours_options do %>
-              <option value={hh}><%= hh %></option>
+              <option value={hh} selected={hh == @end_hour}><%= hh %></option>
             <% end %>
           </select>
         </div>
@@ -32,11 +35,11 @@ defmodule PayrollWeb.HoursLive.AddEntrySection.ShiftTimes.End do
           <label class="block text-xs text-gray-600">Minute</label>
           <select
             name="h[end_min]"
-            value={@form.params["end_min"] || @form[:end_min].value}
+            phx-change="pick_time"
             class="mt-1 w-full border rounded p-2 text-base bg-white text-black"
           >
             <%= for mm <- @minutes do %>
-              <option value={mm}><%= mm %></option>
+              <option value={mm} selected={mm == @end_min}><%= mm %></option>
             <% end %>
           </select>
         </div>
