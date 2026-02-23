@@ -1,13 +1,18 @@
+# apps/database/lib/database.ex
 defmodule Database do
   @moduledoc """
   Mnesia wrapper for the umbrella.
 
   Goals:
-  - Persist data across restarts (disc_copies)
+  - Never stop Mnesia during normal boot
   - Create schema/tables only if missing
-  - Be safe to restart repeatedly (idempotent)
+  - Persist data across restarts (disc_copies)
   - If tables already exist as ram_copies, migrate them to disc_copies
-  - Keep Mnesia data contained in the project directory
+  - Be safe to restart repeatedly (idempotent)
+
+  Notes on writes:
+  - `insert_cast/1` is async (fire-and-forget)
+  - `insert_call/1` is sync (read-your-writes), recommended for UI flows
   """
 
   use GenServer
@@ -36,11 +41,6 @@ defmodule Database do
   def init(:ok) do
     n = node()
 
-    mnesia_dir = ensure_mnesia_dir!()
-    ensure_mnesia_env_dir!(mnesia_dir)
-
-    # create_schema must run while Mnesia is not running
-    ensure_stopped()
     ensure_schema(n)
     ensure_started()
     ensure_tables(n)
@@ -51,7 +51,21 @@ defmodule Database do
   # -----------------------------------------------------------------------------
   # Public API
   # -----------------------------------------------------------------------------
-  def insert(tuple), do: GenServer.cast(__MODULE__, {:insert, tuple})
+
+  @doc """
+  Backwards-compatible default insert.
+
+  Currently uses the synchronous call variant (read-your-writes).
+  Prefer calling `insert_call/1` or `insert_cast/1` explicitly going forward.
+  """
+  def insert(tuple), do: insert_call(tuple)
+
+  @doc "Async write (fire-and-forget)."
+  def insert_cast(tuple), do: GenServer.cast(__MODULE__, {:insert_cast, tuple})
+
+  @doc "Sync write (guarantees the write has completed when it returns)."
+  def insert_call(tuple), do: GenServer.call(__MODULE__, {:insert_call, tuple})
+
   def match(pattern), do: :mnesia.dirty_match_object(pattern)
   def table_info(table, what), do: :mnesia.table_info(table, what)
 
@@ -67,10 +81,17 @@ defmodule Database do
   # -----------------------------------------------------------------------------
   # GenServer handlers
   # -----------------------------------------------------------------------------
+
   @impl true
-  def handle_cast({:insert, tuple}, state) do
+  def handle_cast({:insert_cast, tuple}, state) do
     :mnesia.dirty_write(tuple)
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:insert_call, tuple}, _from, state) do
+    :mnesia.dirty_write(tuple)
+    {:reply, :ok, state}
   end
 
   @impl true
@@ -79,53 +100,12 @@ defmodule Database do
   # -----------------------------------------------------------------------------
   # Boot helpers (idempotent)
   # -----------------------------------------------------------------------------
-  defp ensure_mnesia_dir! do
-    # Prefer explicit config if present, otherwise keep it under the project root.
-    dir =
-      case Application.get_env(:mnesia, :dir) do
-        nil ->
-          Path.expand("Mnesia.#{node()}", File.cwd!())
-
-        d when is_list(d) ->
-          List.to_string(d)
-
-        d when is_binary(d) ->
-          d
-      end
-
-    File.mkdir_p!(dir)
-    dir
-  end
-
-  defp ensure_mnesia_env_dir!(dir) when is_binary(dir) do
-    # Mnesia expects a charlist directory.
-    Application.put_env(:mnesia, :dir, String.to_charlist(dir))
-  end
-
-  defp ensure_stopped do
-    case :mnesia.system_info(:is_running) do
-      :yes ->
-        :mnesia.stop()
-        :ok
-
-      _ ->
-        :ok
-    end
-  end
-
   defp ensure_schema(n) do
     case :mnesia.create_schema([n]) do
-      :ok ->
-        :ok
-
-      {:error, {_, {:already_exists, _}}} ->
-        :ok
-
-      {:error, {:already_exists, _}} ->
-        :ok
-
-      {:error, reason} ->
-        raise "Failed to create Mnesia schema: #{inspect(reason)}"
+      :ok -> :ok
+      {:error, {_, {:already_exists, _}}} -> :ok
+      {:error, {:already_exists, _}} -> :ok
+      {:error, reason} -> raise "Failed to create Mnesia schema: #{inspect(reason)}"
     end
   end
 
@@ -151,12 +131,8 @@ defmodule Database do
   end
 
   defp ensure_table(n, table, opts) do
-    # Always prefer disk persistence for local single-node usage.
-    # Explicit disc_copies is the key to avoiding bad_type after resets.
-    opts =
-      opts
-      |> Keyword.put_new(:disc_copies, [n])
-      |> Keyword.delete(:ram_copies)
+    # Always prefer disk persistence for local single-node usage
+    opts = Keyword.put_new(opts, :disc_copies, [n])
 
     case :mnesia.create_table(table, opts) do
       {:atomic, :ok} ->
@@ -177,16 +153,12 @@ defmodule Database do
 
       :ram_copies ->
         case :mnesia.change_table_copy_type(table, n, :disc_copies) do
-          {:atomic, :ok} ->
-            :ok
-
-          {:aborted, reason} ->
-            raise "Failed to migrate #{inspect(table)} to disc_copies: #{inspect(reason)}"
+          {:atomic, :ok} -> :ok
+          {:aborted, reason} -> raise "Failed to migrate #{inspect(table)} to disc_copies: #{inspect(reason)}"
         end
 
-      _other ->
-        # Keep boot robust; don’t crash on unexpected legacy type.
-        :ok
+      other ->
+        {:error, {:unexpected_storage_type, other}}
     end
   end
 

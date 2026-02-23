@@ -306,20 +306,31 @@ defmodule PayrollWeb.HoursLive do
 
   defp parse_hhmm(_), do: :error
 
-  defp validate_params(params, selected_full_name, hours_text) do
-    full_name = (params["full_name"] || selected_full_name || "") |> String.trim()
-    date = (params["date"] || "") |> String.trim()
-    rate = (params["rate"] || "") |> String.trim()
+defp validate_params(params, selected_full_name, hours_text) do
+  full_name = (params["full_name"] || selected_full_name || "") |> String.trim()
+  date = (params["date"] || "") |> String.trim()
+  rate = (params["rate"] || "") |> String.trim()
 
-    errors =
-      %{}
-      |> add_err_if(full_name == "", :full_name, "select an employee")
-      |> add_err_if(not valid_iso_date?(date), :date, "must be YYYY-MM-DD")
-      |> add_err_if(hours_text in [nil, ""], :hours, "hours could not be calculated")
-      |> add_err_if(rate == "" or not valid_float_nonneg?(rate), :rate, "must be a number >= 0")
+  # Time validation uses the controlled hidden fields we keep in the form params
+  shift_start = (params["shift_start"] || "") |> String.trim()
+  shift_end = (params["shift_end"] || "") |> String.trim()
 
-    {params, errors}
-  end
+  shift_time_ok? =
+    case minutes_between(shift_start, shift_end) do
+      {:ok, mins} when mins > 0 -> true
+      _ -> false
+    end
+
+  errors =
+    %{}
+    |> add_err_if(full_name == "", :full_name, "select an employee")
+    |> add_err_if(not valid_iso_date?(date), :date, "must be YYYY-MM-DD")
+    |> add_err_if(not shift_time_ok?, :shift_time, "end must be after start")
+    |> add_err_if(hours_text in [nil, ""], :hours, "hours could not be calculated")
+    |> add_err_if(rate == "" or not valid_float_nonneg?(rate), :rate, "must be a number >= 0")
+
+  {params, errors}
+end
 
   defp valid_iso_date?(s), do: match?({:ok, _}, Date.from_iso8601(s))
 
