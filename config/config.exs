@@ -13,6 +13,9 @@ config :logger, :console,
 # -----------------------------------------------------------------------------
 # Payroll
 # -----------------------------------------------------------------------------
+config :core, Core.PayPeriod,
+  schedule: :biweekly,
+  anchor_date: ~D[2026-01-05]
 
 config :payroll, Payroll.Mailer, adapter: Swoosh.Adapters.Local
 

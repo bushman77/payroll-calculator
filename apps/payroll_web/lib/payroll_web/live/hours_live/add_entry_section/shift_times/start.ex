@@ -52,7 +52,7 @@ defmodule PayrollWeb.HoursLive.AddEntrySection.ShiftTimes.Start do
 
   defp error_line(errors, field) do
     case Map.get(errors, field) do
-      nil -> ""
+      nil -> nil
       msg -> Phoenix.HTML.raw(~s(<p class="text-sm text-red-600 mt-1">#{msg}</p>))
     end
   end

@@ -62,9 +62,9 @@ defmodule PayrollWeb.AppLive do
             Hours
           </a>
 
-          <button class="px-4 py-3 rounded bg-black text-white text-left" disabled>
-            Run payroll (coming next)
-          </button>
+          <a href="/payrun" class="px-4 py-3 rounded bg-black text-white text-left">
+            Run payroll
+          </a>
         </div>
       </div>
     </div>

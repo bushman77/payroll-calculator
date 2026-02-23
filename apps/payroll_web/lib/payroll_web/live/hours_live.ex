@@ -32,7 +32,6 @@ defmodule PayrollWeb.HoursLive do
 
     {:ok,
      socket
-     |> assign(:rev, 0)
      |> assign(:minutes, @minutes)
      |> assign(:hours_options, hours_options())
      |> assign(:employees, employees)
@@ -40,6 +39,7 @@ defmodule PayrollWeb.HoursLive do
      |> assign(:entries, load_entries(selected))
      |> assign(:summary, load_summary(selected))
      |> assign(:errors, %{})
+     # controlled time assigns (source of truth for live updates)
      |> assign(:start_hour, form_params["start_hour"])
      |> assign(:start_min, form_params["start_min"])
      |> assign(:end_hour, form_params["end_hour"])
@@ -47,6 +47,7 @@ defmodule PayrollWeb.HoursLive do
      |> assign(:shift_start, shift_start)
      |> assign(:shift_end, shift_end)
      |> assign(:hours_text, hours)
+     # form holds non-time inputs + hidden values for submit
      |> assign(:form, to_form(form_params, as: :h))}
   end
 
@@ -78,7 +79,6 @@ defmodule PayrollWeb.HoursLive do
      |> assign(:form, to_form(form_params, as: :h))}
   end
 
-  # Controlled time pickers: supports both payload formats (map or querystring)
   @impl true
   def handle_event("pick_time", %{"_target" => ["h", field]} = params, socket) do
     h =
@@ -112,11 +112,6 @@ defmodule PayrollWeb.HoursLive do
         socket.assigns.end_min
       )
 
-    # Uncomment if you want server-side proof:
-    # IO.inspect({field, value, shift_start, shift_end, hours}, label: "PICK_DERIVED")
-
-    socket = update(socket, :rev, &(&1 + 1))
-
     {:noreply,
      socket
      |> assign(:shift_start, shift_start)
@@ -125,7 +120,6 @@ defmodule PayrollWeb.HoursLive do
      |> refresh_form_hidden_times()}
   end
 
-  # Date/rate/notes validation only (no time logic here)
   @impl true
   def handle_event("validate", %{"h" => params}, socket) do
     merged = Map.merge(socket.assigns.form.params, params)
@@ -150,42 +144,60 @@ defmodule PayrollWeb.HoursLive do
        |> assign(:errors, errors)
        |> assign(:form, to_form(merged, as: :h))}
     else
-      :ok =
-        Core.add_hours_entry(%{
-          full_name: socket.assigns.selected,
-          date: (merged["date"] || "") |> String.trim(),
-          shift_start: socket.assigns.shift_start,
-          shift_end: socket.assigns.shift_end,
-          rate: parse_float!(merged["rate"]),
-          hours: parse_float!(socket.assigns.hours_text),
-          notes: (merged["notes"] || "") |> to_string()
-        })
+      payload = %{
+        full_name: socket.assigns.selected,
+        date: (merged["date"] || "") |> String.trim(),
+        shift_start: socket.assigns.shift_start,
+        shift_end: socket.assigns.shift_end,
+        rate: parse_float!(merged["rate"]),
+        hours: parse_float!(socket.assigns.hours_text),
+        notes: (merged["notes"] || "") |> to_string()
+      }
 
-      full_name = socket.assigns.selected
-      fresh = default_params(full_name)
+      case Core.add_hours_entry(payload) do
+        :ok ->
+          reset_after_save(socket)
 
-      {shift_start, shift_end, hours} =
-        derive_times_and_hours(
-          fresh["start_hour"],
-          fresh["start_min"],
-          fresh["end_hour"],
-          fresh["end_min"]
-        )
+        {:ok, _} ->
+          reset_after_save(socket)
 
-      {:noreply,
-       socket
-       |> put_flash(:info, "Hours saved")
-       |> assign(:entries, load_entries(full_name))
-       |> assign(:summary, load_summary(full_name))
-       |> assign(:errors, %{})
-       |> assign(:start_hour, fresh["start_hour"])
-       |> assign(:start_min, fresh["start_min"])
-       |> assign(:end_hour, fresh["end_hour"])
-       |> assign(:end_min, fresh["end_min"])
-       |> assign(:shift_start, shift_start)
-       |> assign(:shift_end, shift_end)
-       |> assign(:hours_text, hours)
-       |> assign(:form, to_form(fresh, as: :h))}
+        {:error, {:duplicate_hours_entry, _meta}} ->
+          {:noreply,
+           socket
+           |> assign(:errors, Map.put(socket.assigns.errors, :shift_time, "duplicate entry for this exact shift"))
+           |> assign(:form, to_form(merged, as: :h))}
+
+        {:error, {:overlap_hours_entry, _meta}} ->
+          {:noreply,
+           socket
+           |> assign(:errors, Map.put(socket.assigns.errors, :shift_time, "shift overlaps an existing entry on this date"))
+           |> assign(:form, to_form(merged, as: :h))}
+
+        # Backward-compatible patterns while refactor settles
+        {:error, :duplicate} ->
+          {:noreply,
+           socket
+           |> assign(:errors, Map.put(socket.assigns.errors, :shift_time, "duplicate entry for this exact shift"))
+           |> assign(:form, to_form(merged, as: :h))}
+
+        {:error, :overlap} ->
+          {:noreply,
+           socket
+           |> assign(:errors, Map.put(socket.assigns.errors, :shift_time, "shift overlaps an existing entry on this date"))
+           |> assign(:form, to_form(merged, as: :h))}
+
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> put_flash(:error, "Could not save entry: #{inspect(reason)}")
+           |> assign(:form, to_form(merged, as: :h))}
+
+        other ->
+          {:noreply,
+           socket
+           |> put_flash(:error, "Unexpected save result: #{inspect(other)}")
+           |> assign(:form, to_form(merged, as: :h))}
+      end
     end
   end
 
@@ -193,14 +205,6 @@ defmodule PayrollWeb.HoursLive do
   def render(assigns) do
     ~H"""
     <div class="p-6 max-w-xl mx-auto space-y-4">
-      <p class="text-xs text-red-600">
-        REV=<%= @rev %>
-        start_hour=<%= @start_hour %>
-        start=<%= @shift_start %>
-        end=<%= @shift_end %>
-        hours=<%= @hours_text %>
-      </p>
-
       <Header.render title="Hours" subtitle="Times auto-calc hours (hours is read-only)." back_href="/app" />
 
       <EmployeeSection.render employees={@employees} selected={@selected} summary={@summary} />
@@ -227,6 +231,34 @@ defmodule PayrollWeb.HoursLive do
   end
 
   # ---------------- helpers ----------------
+
+  defp reset_after_save(socket) do
+    full_name = socket.assigns.selected
+    fresh = default_params(full_name)
+
+    {shift_start, shift_end, hours} =
+      derive_times_and_hours(
+        fresh["start_hour"],
+        fresh["start_min"],
+        fresh["end_hour"],
+        fresh["end_min"]
+      )
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Hours saved")
+     |> assign(:entries, load_entries(full_name))
+     |> assign(:summary, load_summary(full_name))
+     |> assign(:errors, %{})
+     |> assign(:start_hour, fresh["start_hour"])
+     |> assign(:start_min, fresh["start_min"])
+     |> assign(:end_hour, fresh["end_hour"])
+     |> assign(:end_min, fresh["end_min"])
+     |> assign(:shift_start, shift_start)
+     |> assign(:shift_end, shift_end)
+     |> assign(:hours_text, hours)
+     |> assign(:form, to_form(fresh, as: :h))}
+  end
 
   defp refresh_form_hidden_times(socket) do
     merged =
@@ -306,31 +338,29 @@ defmodule PayrollWeb.HoursLive do
 
   defp parse_hhmm(_), do: :error
 
-defp validate_params(params, selected_full_name, hours_text) do
-  full_name = (params["full_name"] || selected_full_name || "") |> String.trim()
-  date = (params["date"] || "") |> String.trim()
-  rate = (params["rate"] || "") |> String.trim()
+  defp validate_params(params, selected_full_name, hours_text) do
+    full_name = (params["full_name"] || selected_full_name || "") |> String.trim()
+    date = (params["date"] || "") |> String.trim()
+    rate = (params["rate"] || "") |> String.trim()
+    shift_start = (params["shift_start"] || "") |> String.trim()
+    shift_end = (params["shift_end"] || "") |> String.trim()
 
-  # Time validation uses the controlled hidden fields we keep in the form params
-  shift_start = (params["shift_start"] || "") |> String.trim()
-  shift_end = (params["shift_end"] || "") |> String.trim()
+    shift_time_ok? =
+      case minutes_between(shift_start, shift_end) do
+        {:ok, mins} when mins > 0 -> true
+        _ -> false
+      end
 
-  shift_time_ok? =
-    case minutes_between(shift_start, shift_end) do
-      {:ok, mins} when mins > 0 -> true
-      _ -> false
-    end
+    errors =
+      %{}
+      |> add_err_if(full_name == "", :full_name, "select an employee")
+      |> add_err_if(not valid_iso_date?(date), :date, "must be YYYY-MM-DD")
+      |> add_err_if(not shift_time_ok?, :shift_time, "end must be after start")
+      |> add_err_if(hours_text in [nil, ""], :hours, "hours could not be calculated")
+      |> add_err_if(rate == "" or not valid_float_nonneg?(rate), :rate, "must be a number >= 0")
 
-  errors =
-    %{}
-    |> add_err_if(full_name == "", :full_name, "select an employee")
-    |> add_err_if(not valid_iso_date?(date), :date, "must be YYYY-MM-DD")
-    |> add_err_if(not shift_time_ok?, :shift_time, "end must be after start")
-    |> add_err_if(hours_text in [nil, ""], :hours, "hours could not be calculated")
-    |> add_err_if(rate == "" or not valid_float_nonneg?(rate), :rate, "must be a number >= 0")
-
-  {params, errors}
-end
+    {params, errors}
+  end
 
   defp valid_iso_date?(s), do: match?({:ok, _}, Date.from_iso8601(s))
 

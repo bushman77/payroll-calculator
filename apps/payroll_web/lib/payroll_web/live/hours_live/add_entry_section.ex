@@ -52,16 +52,16 @@ defmodule PayrollWeb.HoursLive.AddEntrySection do
           errors={@errors}
         />
 
-<div class="text-xs text-gray-500">
-  dbg start=<%= @shift_start %> end=<%= @shift_end %> hours=<%= @hours_text %>
-</div>
+    <div class="text-xs text-gray-500">
+    dbg start=<%= @shift_start %> end=<%= @shift_end %> hours=<%= @hours_text %>
+    </div>
 
-<CalculatedHours.render
-  hours_text={@hours_text}
-  shift_start={@shift_start}
-  shift_end={@shift_end}
-  errors={@errors}
-/>
+    <CalculatedHours.render
+    hours_text={@hours_text}
+    shift_start={@shift_start}
+    shift_end={@shift_end}
+    errors={@errors}
+    />
         <div class="grid grid-cols-2 gap-3">
           <Rate.render form={@form} errors={@errors} />
           <Notes.render form={@form} />

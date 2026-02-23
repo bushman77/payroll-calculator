@@ -7,7 +7,7 @@ defmodule Core do
   - Company settings are stored in DB as:
       {CompanySettings, :singleton, %{...}}
   """
-
+alias Core.PayrunStore
   # -----------------------------------------------------------------------------
   # Money / rounding
   # -----------------------------------------------------------------------------
@@ -113,6 +113,24 @@ defmodule Core do
   # -----------------------------------------------------------------------------
   # Pay period mapping (biweekly, settings-driven)
   # -----------------------------------------------------------------------------
+
+alias Core.PayrunStore
+
+@doc "Finalize and persist a payrun snapshot."
+def save_payrun(payrun_map) do
+  PayrunStore.save_run(payrun_map)
+end
+
+@doc "List previously finalized payruns."
+def list_payruns do
+  PayrunStore.list_runs()
+end
+
+@doc "Get a finalized payrun snapshot (header + lines)."
+def get_payrun_snapshot(run_id) do
+  PayrunStore.get_snapshot(run_id)
+end
+
   @doc """
   Returns all biweekly paydays for a year based on the persisted company anchor payday.
   """
@@ -267,24 +285,119 @@ defmodule Core do
   # -----------------------------------------------------------------------------
   # Hours helpers (Database owns Mnesia; Core provides safe wrappers)
   # -----------------------------------------------------------------------------
-  @doc """
-  Inserts an hours entry tuple into the Hours table.
+@doc """
+Inserts an hours entry tuple into the Hours table.
 
-  Tuple format:
-    {Hours, full_name, date_iso, shift_start, shift_end, rate, hours, notes}
-  """
-  def add_hours_entry(%{
-        full_name: full_name,
-        date: date_iso,
-        shift_start: shift_start,
-        shift_end: shift_end,
-        rate: rate,
-        hours: hours,
-        notes: notes
-      }) do
-    tuple = {Hours, full_name, date_iso, shift_start, shift_end, rate, hours, notes}
-    Database.insert(tuple)
-    :ok
+Tuple format:
+  {Hours, full_name, date_iso, shift_start, shift_end, rate, hours, notes}
+
+Returns:
+  :ok
+  {:error, :duplicate}
+  {:error, :overlap}
+  {:error, {:duplicate, existing}}
+  {:error, {:overlap, existing}}
+  {:error, reason}
+"""
+def add_hours_entry(%{
+      full_name: full_name,
+      date: date_iso,
+      shift_start: shift_start,
+      shift_end: shift_end,
+      rate: rate,
+      hours: hours,
+      notes: notes
+    }) do
+  tuple = {Hours, full_name, date_iso, shift_start, shift_end, rate, hours, notes}
+
+  # IMPORTANT: return the DB result so LiveView can show duplicate/overlap errors
+  Database.insert(tuple)
+end
+
+  defp duplicate_or_overlap(full_name, date_iso, shift_start, shift_end) do
+    existing =
+      hours_for_employee(full_name)
+      |> Enum.filter(fn
+        {Hours, ^full_name, ^date_iso, _ss, _se, _rate, _hours, _notes} -> true
+        _ -> false
+      end)
+
+    cond do
+      exact_duplicate?(existing, shift_start, shift_end) ->
+        {:error, :duplicate}
+
+      overlaps_existing?(existing, shift_start, shift_end) ->
+        {:error, :overlap}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp exact_duplicate?(entries, shift_start, shift_end) do
+    Enum.any?(entries, fn
+      {Hours, _n, _d, ss, se, _r, _h, _notes} ->
+        to_string(ss) == to_string(shift_start) and to_string(se) == to_string(shift_end)
+
+      _ ->
+        false
+    end)
+  end
+
+  defp overlaps_existing?(entries, shift_start, shift_end) do
+    with {:ok, new_start, new_end} <- to_range(shift_start, shift_end) do
+      Enum.any?(entries, fn
+        {Hours, _n, _d, ss, se, _r, _h, _notes} ->
+          case to_range(ss, se) do
+            {:ok, old_start, old_end} ->
+              ranges_overlap?(new_start, new_end, old_start, old_end)
+
+            _ ->
+              false
+          end
+
+        _ ->
+          false
+      end)
+    else
+      _ -> false
+    end
+  end
+
+  # Half-open interval overlap: [a1, a2) overlaps [b1, b2)
+  defp ranges_overlap?(a1, a2, b1, b2), do: a1 < b2 and b1 < a2
+
+  defp to_range(start_s, end_s) do
+    with {:ok, s} <- hhmm_to_minutes(start_s),
+         {:ok, e} <- hhmm_to_minutes(end_s),
+         true <- e > s do
+      {:ok, s, e}
+    else
+      _ -> :error
+    end
+  end
+
+  defp hhmm_to_minutes(value) do
+    value =
+      value
+      |> to_string()
+      |> String.trim()
+      |> String.slice(0, 5)
+
+    case String.split(value, ":") do
+      [h, m] ->
+        with {hh, ""} <- Integer.parse(h),
+             {mm, ""} <- Integer.parse(m),
+             true <- hh in 0..23,
+             true <- mm in 0..59 do
+          {:ok, hh * 60 + mm}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
   end
 
   @doc "Returns all Hours tuples for an employee."
@@ -327,4 +440,22 @@ defmodule Core do
         totals_hours_gross(tuples)
     end
   end
+def create_payrun(run_meta, lines), do: Core.PayrunStore.create_run(run_meta, lines)
+def list_payruns, do: Core.PayrunStore.list_runs()
+def get_payrun(run_id), do: Core.PayrunStore.get_run(run_id)
+def get_payrun_lines(run_id), do: Core.PayrunStore.get_run_lines(run_id)
+def get_payrun_with_lines(run_id), do: Core.PayrunStore.get_run_with_lines(run_id)
+
+# ---- Payrun persistence API ----
+
+@doc "List finalized payruns (newest first)."
+def list_payruns do
+  PayrunStore.list_runs()
+end
+
+@doc "Fetch one finalized payrun by run_id."
+def get_payrun(run_id) when is_binary(run_id) do
+  PayrunStore.get_run(run_id)
+end
+
 end
