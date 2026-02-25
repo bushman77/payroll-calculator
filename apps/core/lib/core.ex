@@ -1,3 +1,4 @@
+# lib/core.ex
 defmodule Core do
   @moduledoc false
 
@@ -9,52 +10,72 @@ defmodule Core do
   # ---------- Company settings ----------
 
   def company_settings do
-    case Company.get_settings() do
+    settings =
+      call_company0(:get_settings) ||
+        call_company0(:settings)
+
+    case settings do
       nil -> default_company_settings()
-      settings -> normalize_company_settings(settings)
+      s -> normalize_company_settings(s)
     end
   end
 
-def save_company_settings(attrs) when is_map(attrs) do
-  settings = normalize_company_settings(attrs)
+  def company_initialized? do
+    settings = company_settings()
 
-  cond do
-    function_exported?(Company, :save_settings, 1) ->
-      case Company.save_settings(settings) do
-        :ok -> :ok
-        {:ok, _} -> :ok
-        {:error, _} = err -> err
-        _ -> :ok
-      end
+    name =
+      settings
+      |> Map.get(:name, "")
+      |> to_string()
+      |> String.trim()
 
-    function_exported?(Company, :put_settings, 1) ->
-      case Company.put_settings(settings) do
-        :ok -> :ok
-        {:ok, _} -> :ok
-        {:error, _} = err -> err
-        _ -> :ok
-      end
-
-    function_exported?(Company, :set_settings, 1) ->
-      case Company.set_settings(settings) do
-        :ok -> :ok
-        {:ok, _} -> :ok
-        {:error, _} = err -> err
-        _ -> :ok
-      end
-
-    function_exported?(Company, :update_settings, 1) ->
-      case Company.update_settings(settings) do
-        :ok -> :ok
-        {:ok, _} -> :ok
-        {:error, _} = err -> err
-        _ -> :ok
-      end
-
-    true ->
-      {:error, :company_save_settings_function_missing}
+    name != "" and String.downcase(name) not in ["company", "payroll calculator"]
   end
-end
+
+  def save_company_settings(attrs) when is_map(attrs) do
+    settings = normalize_company_settings(attrs)
+
+    cond do
+      company_callable?(:save_settings, 1) ->
+        normalize_company_save_result(call_company1(:save_settings, settings))
+
+      company_callable?(:put_settings, 1) ->
+        normalize_company_save_result(call_company1(:put_settings, settings))
+
+      company_callable?(:set_settings, 1) ->
+        normalize_company_save_result(call_company1(:set_settings, settings))
+
+      company_callable?(:update_settings, 1) ->
+        normalize_company_save_result(call_company1(:update_settings, settings))
+
+      true ->
+        {:error, :company_save_settings_function_missing}
+    end
+  end
+
+  defp normalize_company_save_result(result) do
+    case result do
+      :ok -> :ok
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
+      _ -> :ok
+    end
+  end
+
+  defp company_module, do: Company
+
+  defp company_callable?(fun, arity) do
+    mod = company_module()
+    Code.ensure_loaded?(mod) and function_exported?(mod, fun, arity)
+  end
+
+  defp call_company0(fun) do
+    if company_callable?(fun, 0), do: apply(company_module(), fun, []), else: nil
+  end
+
+  defp call_company1(fun, arg) do
+    if company_callable?(fun, 1), do: apply(company_module(), fun, [arg]), else: nil
+  end
 
   def settings_preview(settings) do
     settings = normalize_company_settings(settings)
@@ -151,7 +172,6 @@ end
   defp normalize_int(_, default), do: default
 
   defp normalize_pay_frequency(v) when v in [:weekly, :biweekly, :semi_monthly, :monthly], do: v
-
   defp normalize_pay_frequency(:semimonthly), do: :semi_monthly
 
   defp normalize_pay_frequency(v) when is_binary(v) do
@@ -314,6 +334,8 @@ end
 
   defp hhmm_to_minutes(_), do: :error
 
+  # ---------- Numeric helpers / payroll helpers ----------
+
   defp num(n) when is_integer(n), do: n * 1.0
   defp num(n) when is_float(n), do: n
 
@@ -325,13 +347,171 @@ end
   end
 
   def struct(module), do: Database.select(module)
-@doc """
-Rounds a numeric value to 2 decimal places for payroll money display/storage.
-Always returns a float.
-"""
-def money_round(value) do
-  value
-  |> num()
-  |> Float.round(2)
-end
+
+  @doc """
+  Rounds a numeric value to 2 decimal places for payroll money display/storage.
+  Always returns a float.
+  """
+  def money_round(value) do
+    value
+    |> num()
+    |> Float.round(2)
+  end
+
+  @doc """
+  Returns YTD EI-insurable earnings (capped at the annual EI max insurable earnings).
+
+  This is used for payroll remittance/reporting calculations where EI earnings must
+  not exceed the yearly insurable maximum.
+  """
+  def ei_earnings(year, ytd_gross) do
+    gross = num(ytd_gross)
+    cap = ei_max_insurable(year)
+
+    gross
+    |> max(0.0)
+    |> min(cap)
+    |> money_round()
+  end
+
+  # Annual EI max insurable earnings (Canada)
+  # Update as needed for new tax years.
+  defp ei_max_insurable(year) when is_binary(year) do
+    case Integer.parse(String.trim(year)) do
+      {y, _} -> ei_max_insurable(y)
+      _ -> ei_max_insurable(Date.utc_today().year)
+    end
+  end
+
+  defp ei_max_insurable(year) when is_integer(year) do
+    case year do
+      2024 -> 63_200.00
+      2025 -> 65_700.00
+      2026 -> 67_000.00
+      _ -> 67_000.00
+    end
+  end
+
+  defp ei_max_insurable(_), do: ei_max_insurable(Date.utc_today().year)
+
+  @doc """
+  Returns CPP pensionable earnings for a pay period.
+
+  Pensionable earnings are the portion of gross pay above the prorated basic
+  exemption, capped by the annual CPP max pensionable earnings (YMPE).
+  """
+  def cpp_earnings(year, period_gross, periods_per_year) do
+    gross = num(period_gross)
+    ppy = normalize_periods_per_year(periods_per_year)
+
+    basic_exemption_period = cpp_basic_exemption() / ppy
+    ympe_period_cap = cpp_ympe(year) / ppy
+
+    gross
+    |> max(0.0)
+    |> min(ympe_period_cap)
+    |> Kernel.-(basic_exemption_period)
+    |> max(0.0)
+    |> money_round()
+  end
+
+  defp cpp_basic_exemption, do: 3_500.00
+
+  # CPP YMPE (Year's Maximum Pensionable Earnings)
+  # Update annually.
+  defp cpp_ympe(year) when is_binary(year) do
+    case Integer.parse(String.trim(year)) do
+      {y, _} -> cpp_ympe(y)
+      _ -> cpp_ympe(Date.utc_today().year)
+    end
+  end
+
+  defp cpp_ympe(year) when is_integer(year) do
+    case year do
+      2024 -> 68_500.00
+      2025 -> 71_300.00
+      2026 -> 73_200.00
+      _ -> 73_200.00
+    end
+  end
+
+  defp cpp_ympe(_), do: cpp_ympe(Date.utc_today().year)
+
+  defp normalize_periods_per_year(v) when is_integer(v) and v > 0, do: v
+
+  defp normalize_periods_per_year(v) when is_binary(v) do
+    case Integer.parse(String.trim(v)) do
+      {n, ""} when n > 0 -> n
+      _ -> 26
+    end
+  end
+
+  defp normalize_periods_per_year(_), do: 26
+
+  @doc """
+  Returns the number of pay periods per year based on the configured company pay frequency.
+
+  Accepts a `year` argument for compatibility with payroll callers, but the current
+  implementation derives the result from company settings.
+  """
+  def pay_periods_per_year(_year) do
+    company_settings()
+    |> Map.get(:pay_frequency, :biweekly)
+    |> PayPeriod.periods_per_year()
+  end
+
+  @doc """
+  Returns the pay period sequence tuple for a given date.
+
+  Expected return shape:
+    [{period_map_or_struct, index}]
+  """
+  def sequence(%Date{} = date) do
+    settings = company_settings()
+
+    schedule =
+      settings
+      |> Map.get(:pay_frequency, :biweekly)
+      |> case do
+        :semi_monthly -> :semimonthly
+        "semi_monthly" -> :semimonthly
+        other -> other
+      end
+
+    anchor =
+      settings
+      |> Map.get(:anchor_payday, Date.utc_today())
+      |> case do
+        %Date{} = d ->
+          d
+
+        iso when is_binary(iso) ->
+          case Date.from_iso8601(String.trim(iso)) do
+            {:ok, d} -> d
+            _ -> Date.utc_today()
+          end
+
+        _ ->
+          Date.utc_today()
+      end
+
+    period = PayPeriod.period_for_date(date, schedule, anchor)
+    index = Map.get(period, :period_index, 1)
+
+    [{period, index}]
+  end
+
+  def sequence(date) when is_binary(date) do
+    case Date.from_iso8601(String.trim(date)) do
+      {:ok, d} -> sequence(d)
+      _ -> []
+    end
+  end
+
+  @doc """
+  Returns the pay period sequence tuple for today.
+  """
+  def sequence do
+    sequence(Date.utc_today())
+  end
 end

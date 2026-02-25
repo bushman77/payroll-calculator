@@ -1,15 +1,17 @@
 defmodule PayrollWeb do
   @moduledoc false
 
-  def controller do
-    quote do
-      use Phoenix.Controller, namespace: PayrollWeb
+def controller do
+  quote do
+    use Phoenix.Controller,
+      namespace: PayrollWeb,
+      formats: [:html, :json],
+      layouts: [html: PayrollWeb.Layouts]
 
-      import Plug.Conn
-      import PayrollWeb.Gettext
-      alias PayrollWeb.Router.Helpers, as: Routes
-    end
+    import Plug.Conn
+    import PayrollWeb.Gettext
   end
+end
 
   def view do
     quote do

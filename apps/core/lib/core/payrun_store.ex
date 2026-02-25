@@ -35,7 +35,7 @@ defmodule Core.PayrunStore do
 
   # ---------- Public API ----------
 
-  def save_run(%{period: period, lines: lines} = payrun) when is_map(period) and is_list(lines) do
+  def save_run(%{period: period, lines: lines}) when is_map(period) and is_list(lines) do
     ensure_tables!()
 
     run_id = make_run_id()

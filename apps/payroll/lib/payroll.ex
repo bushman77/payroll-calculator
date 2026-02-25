@@ -37,7 +37,7 @@ defmodule Payroll do
   @doc """
   Returns the Hours wild pattern tuple via the Database app.
   """
-  def enter_hours(), do: Database.table_info(Hours, :wild_pattern)
+  def enter_hours(), do: {Hours, :_, :_, :_, :_, :_, :_, :_}
 
   @doc """
   Inserts a Hours tuple via the Database app.

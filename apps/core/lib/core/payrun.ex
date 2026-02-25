@@ -140,20 +140,17 @@ defmodule Core.Payrun do
   end
 
   # ---------------- Internal helpers ----------------
-
-  defp active_employee_names do
-    cond do
-      Code.ensure_loaded?(Employee) and function_exported?(Employee, :active, 0) ->
-        Employee.active()
-        |> Enum.map(fn
-          {full_name, _emp} when is_binary(full_name) -> full_name
-          other -> raise "Unexpected Employee.active/0 row: #{inspect(other)}"
-        end)
-
-      true ->
-        []
-    end
-  end
+defp active_employee_names do
+  Core.Query.match({Employee, :_, :_})
+  |> Enum.filter(fn
+    {Employee, _full_name, emp} -> Map.get(emp, :status, :active) == :active
+    _ -> false
+  end)
+  |> Enum.map(fn {Employee, full_name, _emp} -> to_string(full_name) end)
+  |> Enum.sort_by(&String.downcase/1)
+rescue
+  _ -> []
+end
 
   defp row_in_period?(
          {_Hours, _name, date_iso, _ss, _se, _rate, _hours, _notes},
