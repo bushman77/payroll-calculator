@@ -31,8 +31,7 @@ defmodule Payroll.MixProject do
     [
       {:core, in_umbrella: true},
       {:phoenix_pubsub, "~> 2.0"},
-      {:swoosh, "~> 1.3"},
-      {:pdf, "~> 0.6"}
+      {:swoosh, "~> 1.3"}
     ]
   end
 

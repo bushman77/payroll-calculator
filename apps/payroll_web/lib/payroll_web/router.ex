@@ -25,6 +25,7 @@ defmodule PayrollWeb.Router do
     live "/payrun", PayrunLive
     live "/payruns", PayrunsLive
     live "/payruns/:run_id", PayrunShowLive
+    get "/payruns/:run_id/paystub/:name", PaystubDownloadController, :show
   end
 
   if Mix.env() in [:dev, :test] do

@@ -155,7 +155,11 @@ defmodule Core.Payrun do
     end
   end
 
-  defp row_in_period?({_Hours, _name, date_iso, _ss, _se, _rate, _hours, _notes}, start_date, end_date) do
+  defp row_in_period?(
+         {_Hours, _name, date_iso, _ss, _se, _rate, _hours, _notes},
+         start_date,
+         end_date
+       ) do
     case Date.from_iso8601(to_string(date_iso)) do
       {:ok, d} ->
         Date.compare(d, start_date) != :lt and Date.compare(d, end_date) != :gt

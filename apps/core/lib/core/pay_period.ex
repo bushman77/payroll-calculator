@@ -1,43 +1,6 @@
 defmodule Core.PayPeriod do
   @moduledoc """
-  Pay period date-window logic.
-
-  This module centralizes payroll period calculations so the rest of the system
-  (payrun, summaries, ROE prep, etc.) can rely on one consistent source.
-
-  Supported schedules:
-    - `:weekly`
-    - `:biweekly`
-    - `:semimonthly` (1st..15th, 16th..end_of_month)
-
-  ## Configuration (optional)
-
-  You can configure defaults in `config/*.exs`:
-
-      config :core, Core.PayPeriod,
-        schedule: :biweekly,
-        anchor_date: ~D[2026-01-05]
-
-  Notes:
-    * `anchor_date` is used for `:weekly` and `:biweekly` cycle alignment.
-    * For `:semimonthly`, anchor date is ignored.
-
-  ## Return shape
-
-  Functions return a map like:
-
-      %{
-        schedule: :biweekly,
-        period_index: 3,
-        start_date: ~D[2026-02-16],
-        end_date: ~D[2026-03-01],
-        start_iso: "2026-02-16",
-        end_iso: "2026-03-01"
-      }
-
-  `period_index` is:
-    * integer for `:weekly`/`:biweekly` (relative to anchor)
-    * `{year, month, half}` for `:semimonthly`
+  Pay period date-window logic + payday previews for setup screens.
   """
 
   @type schedule :: :weekly | :biweekly | :semimonthly
@@ -58,40 +21,24 @@ defmodule Core.PayPeriod do
 
   # -------------- Public API --------------
 
-  @doc """
-  Returns the current pay period based on today's UTC date.
-
-  Uses configured/default schedule and anchor.
-  """
   @spec current_period() :: period()
   def current_period do
     period_for_date(Date.utc_today())
   end
 
-  @doc """
-  Returns the pay period containing `date`.
-
-  Accepts:
-    * `Date`
-    * ISO date string (`"YYYY-MM-DD"`)
-
-  Uses configured/default schedule and anchor.
-  """
   @spec period_for_date(Date.t() | String.t()) :: period()
   def period_for_date(date) do
     date = to_date!(date)
     schedule = configured_schedule()
     anchor = configured_anchor()
-
     period_for_date(date, schedule, anchor)
   end
 
-  @doc """
-  Same as `period_for_date/1` but explicit schedule + anchor override.
-  """
-  @spec period_for_date(Date.t() | String.t(), schedule(), Date.t()) :: period()
-  def period_for_date(date, schedule, anchor) when schedule in [:weekly, :biweekly, :semimonthly] do
+  @spec period_for_date(Date.t() | String.t(), schedule(), Date.t() | String.t()) :: period()
+  def period_for_date(date, schedule, anchor)
+      when schedule in [:weekly, :biweekly, :semimonthly] do
     date = to_date!(date)
+    anchor = normalize_anchor(anchor)
 
     case schedule do
       :weekly -> weekly_period(date, anchor)
@@ -100,15 +47,9 @@ defmodule Core.PayPeriod do
     end
   end
 
-  @doc """
-  Bang variant for callers that prefer explicit failure on bad date strings.
-  """
   @spec period_for_date!(Date.t() | String.t()) :: period()
   def period_for_date!(date), do: period_for_date(date)
 
-  @doc """
-  Returns the previous period relative to the given period map.
-  """
   @spec previous_period(period()) :: period()
   def previous_period(%{schedule: :weekly, start_date: start_date}) do
     period_for_date(Date.add(start_date, -1), :weekly, configured_anchor())
@@ -122,9 +63,6 @@ defmodule Core.PayPeriod do
     period_for_date(Date.add(start_date, -1), :semimonthly, configured_anchor())
   end
 
-  @doc """
-  Returns the next period relative to the given period map.
-  """
   @spec next_period(period()) :: period()
   def next_period(%{schedule: :weekly, end_date: end_date}) do
     period_for_date(Date.add(end_date, 1), :weekly, configured_anchor())
@@ -138,19 +76,66 @@ defmodule Core.PayPeriod do
     period_for_date(Date.add(end_date, 1), :semimonthly, configured_anchor())
   end
 
-  @doc """
-  True if `date` falls within the given period (inclusive).
-  """
   @spec contains?(period(), Date.t() | String.t()) :: boolean()
   def contains?(%{start_date: start_date, end_date: end_date}, date) do
     date = to_date!(date)
     Date.compare(date, start_date) != :lt and Date.compare(date, end_date) != :gt
   end
 
+  @doc """
+  Returns the next `count` paydays for the given settings/company map.
+
+  Supported frequencies in settings:
+    - :weekly
+    - :biweekly
+    - :semi_monthly / :semimonthly
+    - :monthly
+  """
+  @spec next_paydays(map(), pos_integer()) :: [Date.t()]
+  def next_paydays(settings, count) when is_map(settings) and is_integer(count) and count > 0 do
+    pay_frequency =
+      settings
+      |> get_setting(:pay_frequency)
+      |> normalize_frequency_for_preview()
+
+    anchor_payday =
+      settings
+      |> get_setting(:anchor_payday)
+      |> normalize_anchor_for_preview()
+
+    today = Date.utc_today()
+
+    case pay_frequency do
+      :weekly ->
+        next_cadence_dates(today, anchor_payday, 7, count)
+
+      :biweekly ->
+        next_cadence_dates(today, anchor_payday, 14, count)
+
+      :monthly ->
+        next_monthly_dates(today, anchor_payday, count)
+
+      :semimonthly ->
+        next_semimonthly_dates(today, count)
+    end
+  end
+
+  @doc """
+  Number of periods/paydays per year for a given frequency.
+  """
+  @spec periods_per_year(atom() | String.t()) :: pos_integer()
+  def periods_per_year(freq) do
+    case normalize_frequency_for_preview(freq) do
+      :weekly -> 52
+      :biweekly -> 26
+      :semimonthly -> 24
+      :monthly -> 12
+    end
+  end
+
   # -------------- Period calculators --------------
 
   defp weekly_period(date, anchor) do
-    anchor = normalize_anchor(anchor)
     days = Date.diff(date, anchor)
     period_index = floor_div(days, 7)
 
@@ -161,7 +146,6 @@ defmodule Core.PayPeriod do
   end
 
   defp biweekly_period(date, anchor) do
-    anchor = normalize_anchor(anchor)
     days = Date.diff(date, anchor)
     period_index = floor_div(days, 14)
 
@@ -183,7 +167,92 @@ defmodule Core.PayPeriod do
     end
   end
 
-  # -------------- Helpers --------------
+  # -------------- Preview payday helpers --------------
+
+  defp get_setting(map, key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp normalize_frequency_for_preview(v) when is_binary(v) do
+    v
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "weekly" -> :weekly
+      "biweekly" -> :biweekly
+      "semi_monthly" -> :semimonthly
+      "semimonthly" -> :semimonthly
+      "monthly" -> :monthly
+      _ -> :biweekly
+    end
+  end
+
+  defp normalize_frequency_for_preview(:semi_monthly), do: :semimonthly
+  defp normalize_frequency_for_preview(:semimonthly), do: :semimonthly
+  defp normalize_frequency_for_preview(:weekly), do: :weekly
+  defp normalize_frequency_for_preview(:biweekly), do: :biweekly
+  defp normalize_frequency_for_preview(:monthly), do: :monthly
+  defp normalize_frequency_for_preview(_), do: :biweekly
+
+  defp normalize_anchor_for_preview(%Date{} = d), do: d
+  defp normalize_anchor_for_preview(v) when is_binary(v), do: to_date!(v)
+  defp normalize_anchor_for_preview(_), do: Date.utc_today()
+
+  defp next_cadence_dates(today, anchor, step_days, count) do
+    days = Date.diff(today, anchor)
+    idx = floor_div(days, step_days)
+
+    candidate = Date.add(anchor, idx * step_days)
+
+    first =
+      case Date.compare(candidate, today) do
+        :lt -> Date.add(candidate, step_days)
+        _ -> candidate
+      end
+
+    for i <- 0..(count - 1), do: Date.add(first, i * step_days)
+  end
+
+  defp next_monthly_dates(today, anchor, count) do
+    dom = anchor.day
+
+    Stream.iterate(0, &(&1 + 1))
+    |> Stream.map(fn offset ->
+      shift_month(today, offset)
+      |> clamp_day_in_month(dom)
+    end)
+    |> Stream.filter(&(Date.compare(&1, today) != :lt))
+    |> Enum.take(count)
+  end
+
+  # Semimonthly payday convention: 15th and end-of-month
+  defp next_semimonthly_dates(today, count) do
+    Stream.iterate(0, &(&1 + 1))
+    |> Stream.flat_map(fn offset ->
+      month_base = shift_month(today, offset)
+      fifteenth = Date.new!(month_base.year, month_base.month, 15)
+      eom = Date.end_of_month(month_base)
+      [fifteenth, eom]
+    end)
+    |> Enum.uniq()
+    |> Enum.filter(&(Date.compare(&1, today) != :lt))
+    |> Enum.take(count)
+  end
+
+  defp shift_month(%Date{year: y, month: m}, offset) do
+    absolute = y * 12 + (m - 1) + offset
+    new_year = div(absolute, 12)
+    new_month = rem(absolute, 12) + 1
+    Date.new!(new_year, new_month, 1)
+  end
+
+  defp clamp_day_in_month(%Date{year: y, month: m}, day) do
+    first = Date.new!(y, m, 1)
+    max_day = Date.days_in_month(first)
+    Date.new!(y, m, min(day, max_day))
+  end
+
+  # -------------- General helpers --------------
 
   defp period_map(schedule, period_index, start_date, end_date) do
     %{
@@ -197,9 +266,6 @@ defmodule Core.PayPeriod do
   end
 
   # Integer floor division that behaves correctly for negative values.
-  # Example:
-  #   floor_div(-1, 7) => -1
-  #   floor_div(-8, 7) => -2
   defp floor_div(a, b) when is_integer(a) and is_integer(b) and b > 0 do
     q = div(a, b)
     r = rem(a, b)

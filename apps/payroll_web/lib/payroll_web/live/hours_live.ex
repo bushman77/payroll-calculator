@@ -164,26 +164,46 @@ defmodule PayrollWeb.HoursLive do
         {:error, {:duplicate_hours_entry, _meta}} ->
           {:noreply,
            socket
-           |> assign(:errors, Map.put(socket.assigns.errors, :shift_time, "duplicate entry for this exact shift"))
+           |> assign(
+             :errors,
+             Map.put(socket.assigns.errors, :shift_time, "duplicate entry for this exact shift")
+           )
            |> assign(:form, to_form(merged, as: :h))}
 
         {:error, {:overlap_hours_entry, _meta}} ->
           {:noreply,
            socket
-           |> assign(:errors, Map.put(socket.assigns.errors, :shift_time, "shift overlaps an existing entry on this date"))
+           |> assign(
+             :errors,
+             Map.put(
+               socket.assigns.errors,
+               :shift_time,
+               "shift overlaps an existing entry on this date"
+             )
+           )
            |> assign(:form, to_form(merged, as: :h))}
 
         # Backward-compatible patterns while refactor settles
         {:error, :duplicate} ->
           {:noreply,
            socket
-           |> assign(:errors, Map.put(socket.assigns.errors, :shift_time, "duplicate entry for this exact shift"))
+           |> assign(
+             :errors,
+             Map.put(socket.assigns.errors, :shift_time, "duplicate entry for this exact shift")
+           )
            |> assign(:form, to_form(merged, as: :h))}
 
         {:error, :overlap} ->
           {:noreply,
            socket
-           |> assign(:errors, Map.put(socket.assigns.errors, :shift_time, "shift overlaps an existing entry on this date"))
+           |> assign(
+             :errors,
+             Map.put(
+               socket.assigns.errors,
+               :shift_time,
+               "shift overlaps an existing entry on this date"
+             )
+           )
            |> assign(:form, to_form(merged, as: :h))}
 
         {:error, reason} ->

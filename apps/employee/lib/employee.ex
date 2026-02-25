@@ -8,7 +8,34 @@ defmodule Employee do
   v1 key: full_name (string)
   """
 
-  defstruct Core.struct(Employee)
+  defstruct [
+    :surname,
+    :givenname,
+    :hourly_rate,
+    :status,
+    :address1,
+    :address2,
+    :city,
+    :province,
+    :postalcode,
+    :sin,
+    :badge,
+    :initial_hire_date,
+    :last_termination,
+    :treaty_number,
+    :band_name,
+    :employee_self_service,
+    :number,
+    :family_number,
+    :reference_number,
+    :birth_date,
+    :sex,
+    :home_phone,
+    :alternate_phone,
+    :email,
+    :notes,
+    :photo
+  ]
 
   @type t :: %__MODULE__{}
 
@@ -80,7 +107,9 @@ defmodule Employee do
             givenname: givenname,
             surname: surname,
             hourly_rate: hourly_rate,
-            status: :active
+            status: :active,
+            notes: [],
+            photo: ""
           })
 
         updated = apply_attrs(base, attrs)
@@ -96,10 +125,7 @@ defmodule Employee do
   @spec update(String.t(), map()) :: {:ok, t()} | {:error, term()}
   def update(full_name, attrs) when is_binary(full_name) and is_map(attrs) do
     with {:ok, emp} <- get(full_name) do
-      updated =
-        emp
-        |> apply_attrs(attrs)
-
+      updated = apply_attrs(emp, attrs)
       Database.insert({Employee, full_name, updated})
       {:ok, updated}
     end
@@ -108,11 +134,8 @@ defmodule Employee do
   @spec set_rate(String.t(), number()) :: {:ok, t()} | {:error, term()}
   def set_rate(full_name, hourly_rate) when is_binary(full_name) and is_number(hourly_rate) do
     cond do
-      hourly_rate < 0 ->
-        {:error, :invalid_rate}
-
-      true ->
-        update(full_name, %{"hourly_rate" => hourly_rate})
+      hourly_rate < 0 -> {:error, :invalid_rate}
+      true -> update(full_name, %{"hourly_rate" => hourly_rate})
     end
   end
 
@@ -121,7 +144,8 @@ defmodule Employee do
     do: update(full_name, %{"status" => :inactive})
 
   @spec activate(String.t()) :: {:ok, t()} | {:error, term()}
-  def activate(full_name) when is_binary(full_name), do: update(full_name, %{"status" => :active})
+  def activate(full_name) when is_binary(full_name),
+    do: update(full_name, %{"status" => :active})
 
   # ----------------------------
   # Helpers
@@ -131,7 +155,11 @@ defmodule Employee do
   defp normalize(%__MODULE__{} = emp), do: emp
 
   defp normalize(map) when is_map(map) do
-    struct(%__MODULE__{}, Map.merge(Map.from_struct(struct(%__MODULE__{})), map))
+    defaults =
+      %__MODULE__{}
+      |> Map.from_struct()
+
+    struct(%__MODULE__{}, Map.merge(defaults, map))
   end
 
   defp normalize(other), do: other
@@ -162,6 +190,17 @@ defmodule Employee do
     |> put_if_present(:alternate_phone, attrs, "alternate_phone")
     |> put_if_present(:email, attrs, "email")
     |> put_if_present(:sin, attrs, "sin")
+    |> put_if_present(:badge, attrs, "badge")
+    |> put_if_present(:initial_hire_date, attrs, "initial_hire_date")
+    |> put_if_present(:last_termination, attrs, "last_termination")
+    |> put_if_present(:treaty_number, attrs, "treaty_number")
+    |> put_if_present(:band_name, attrs, "band_name")
+    |> put_if_present(:employee_self_service, attrs, "employee_self_service")
+    |> put_if_present(:number, attrs, "number")
+    |> put_if_present(:family_number, attrs, "family_number")
+    |> put_if_present(:reference_number, attrs, "reference_number")
+    |> put_if_present(:birth_date, attrs, "birth_date")
+    |> put_if_present(:sex, attrs, "sex")
     |> put_rate_if_present(attrs)
     |> put_status_if_present(attrs)
   end
@@ -176,7 +215,6 @@ defmodule Employee do
 
     cond do
       is_nil(val) -> emp
-      # IMPORTANT: don't overwrite with empty strings
       val == "" -> emp
       true -> Map.put(emp, field, val)
     end

@@ -36,7 +36,8 @@ defmodule Core.MixProject do
 
       # optional, required by JSON middleware
       {:jason, ">= 1.0.0"},
-      {:csv, "~> 3.2"}
+      {:csv, "~> 3.2"},
+      {:pdf, "~> 0.7"}
     ]
   end
 end

@@ -1,333 +1,271 @@
 defmodule Core do
-  @moduledoc """
-  Core utilities: deterministic pay period logic + pure helpers.
+  @moduledoc false
 
-  Guardrails:
-  - Core may depend on Database/stdlib, but must not depend on payroll_web/payroll/company.
-  - Company settings are stored in DB as:
-      {CompanySettings, :singleton, %{...}}
-  """
-alias Core.PayrunStore
-  # -----------------------------------------------------------------------------
-  # Money / rounding
-  # -----------------------------------------------------------------------------
-  def money_round(n) when is_integer(n), do: (n * 1.0) |> money_round()
-  def money_round(n) when is_float(n), do: Float.round(n, 2)
+  alias Core.PayPeriod
+  alias Core.Payrun
+  alias Core.PayrunStore
+  alias Core.PaystubPdf
 
-  # -----------------------------------------------------------------------------
-  # Company Settings (single-tenant)
-  # -----------------------------------------------------------------------------
-  def company_default_settings do
+  # ---------- Company settings ----------
+
+  def company_settings do
+    case Company.get_settings() do
+      nil -> default_company_settings()
+      settings -> normalize_company_settings(settings)
+    end
+  end
+
+def save_company_settings(attrs) when is_map(attrs) do
+  settings = normalize_company_settings(attrs)
+
+  cond do
+    function_exported?(Company, :save_settings, 1) ->
+      case Company.save_settings(settings) do
+        :ok -> :ok
+        {:ok, _} -> :ok
+        {:error, _} = err -> err
+        _ -> :ok
+      end
+
+    function_exported?(Company, :put_settings, 1) ->
+      case Company.put_settings(settings) do
+        :ok -> :ok
+        {:ok, _} -> :ok
+        {:error, _} = err -> err
+        _ -> :ok
+      end
+
+    function_exported?(Company, :set_settings, 1) ->
+      case Company.set_settings(settings) do
+        :ok -> :ok
+        {:ok, _} -> :ok
+        {:error, _} = err -> err
+        _ -> :ok
+      end
+
+    function_exported?(Company, :update_settings, 1) ->
+      case Company.update_settings(settings) do
+        :ok -> :ok
+        {:ok, _} -> :ok
+        {:error, _} = err -> err
+        _ -> :ok
+      end
+
+    true ->
+      {:error, :company_save_settings_function_missing}
+  end
+end
+
+  def settings_preview(settings) do
+    settings = normalize_company_settings(settings)
+
+    next_paydays =
+      settings
+      |> PayPeriod.next_paydays(3)
+      |> Enum.map(&Date.to_iso8601/1)
+
+    first_payday =
+      case next_paydays do
+        [iso | _] -> Date.from_iso8601!(iso)
+        [] -> Date.utc_today()
+      end
+
+    start_date = Date.add(first_payday, settings.period_start_offset_days)
+    cutoff_date = Date.add(first_payday, settings.period_cutoff_offset_days)
+
     %{
-      # identity
-      name: "Payroll Calculator",
+      next_paydays_text: Enum.join(next_paydays, ", "),
+      periods_per_year_text: to_string(PayPeriod.periods_per_year(settings.pay_frequency)),
+      start_offset_text: Date.to_iso8601(start_date),
+      cutoff_offset_text: Date.to_iso8601(cutoff_date)
+    }
+  end
+
+  defp default_company_settings do
+    %{
+      name: "Company",
       province: "BC",
-
-      # optional business IDs
-      business_number: "",
-      payroll_account_rp: "",
-      gst_account_rt: "",
-
-      # contact
       address: "",
       phone: "",
       email: "",
-
-      # payroll schedule
+      business_number: "",
+      payroll_account_rp: "",
+      gst_account_rt: "",
       pay_frequency: :biweekly,
-      anchor_payday: "2023-01-13",
+      anchor_payday: Date.utc_today() |> Date.to_iso8601(),
       period_start_offset_days: -20,
       period_cutoff_offset_days: -7
     }
   end
 
-  @doc """
-  Returns merged settings: defaults overridden by persisted CompanySettings if present.
-  """
-  def company_settings do
-    case Database.match({CompanySettings, :singleton, :_}) do
-      [{CompanySettings, :singleton, settings}] when is_map(settings) ->
-        Map.merge(company_default_settings(), settings)
-
-      _ ->
-        company_default_settings()
-    end
-  end
-
-  def company_initialized? do
-    Database.match({CompanySettings, :singleton, :_}) != []
-  end
-
-  def save_company_settings(settings_map) when is_map(settings_map) do
-    Database.insert({CompanySettings, :singleton, settings_map})
-    :ok
-  end
-
-  # -----------------------------------------------------------------------------
-  # Employee struct template (used by Employee defstruct Core.struct(Employee))
-  # -----------------------------------------------------------------------------
-  def struct(Employee) do
-    [
-      # core payroll fields
-      hourly_rate: 0.0,
-      status: :active,
-      surname: "",
-      givenname: "",
-      address1: "",
-      address2: "",
-      city: "",
-      province: "",
-      postalcode: "",
-      sin: "",
-      home_phone: "",
-      alternate_phone: "",
-      email: "",
-      badge: "",
-      initial_hire_date: "",
-      last_termination: "",
-      treaty_number: "",
-      band_name: "",
-      employee_self_service: "",
-      number: "",
-      family_number: "",
-      reference_number: "",
-      birth_date: "",
-      sex: "",
-      notes: [],
-      photo: ""
-    ]
-  end
-
-  def struct(_), do: []
-
-  # -----------------------------------------------------------------------------
-  # Hours table shape (matches Database @tables Hours attributes)
-  # -----------------------------------------------------------------------------
-  def columns(Employee), do: [:full_name, :struct]
-
-  # IMPORTANT: rate comes before hours (matches Database + Payroll expectations)
-  def columns(Hours), do: [:full_name, :date, :shift_start, :shift_end, :rate, :hours, :notes]
-
-  def columns(_), do: []
-
-  # -----------------------------------------------------------------------------
-  # Pay period mapping (biweekly, settings-driven)
-  # -----------------------------------------------------------------------------
-
-alias Core.PayrunStore
-
-@doc "Finalize and persist a payrun snapshot."
-def save_payrun(payrun_map) do
-  PayrunStore.save_run(payrun_map)
-end
-
-@doc "List previously finalized payruns."
-def list_payruns do
-  PayrunStore.list_runs()
-end
-
-@doc "Get a finalized payrun snapshot (header + lines)."
-def get_payrun_snapshot(run_id) do
-  PayrunStore.get_snapshot(run_id)
-end
-
-  @doc """
-  Returns all biweekly paydays for a year based on the persisted company anchor payday.
-  """
-  def paydays_for_year(year) when is_integer(year) do
-    anchor =
-      case Date.from_iso8601(company_settings().anchor_payday) do
-        {:ok, d} -> d
-        _ -> ~D[2023-01-13]
-      end
-
-    jan1 = Date.new!(year, 1, 1)
-    dec31 = Date.new!(year, 12, 31)
-
-    first = shift_payday_to_on_or_after(anchor, jan1)
-
-    Date.range(first, dec31, 14)
-    |> Enum.to_list()
-  end
-
-  @doc "Returns 26 or 27 for the year (biweekly payday count)."
-  def pay_periods_per_year(year) when is_integer(year),
-    do: paydays_for_year(year) |> length()
-
-  @doc """
-  Creates pay period maps between first and last payday inclusive.
-  start  = payday + period_start_offset_days
-  cutoff = payday + period_cutoff_offset_days
-  """
-  def periods(first_payday, last_payday) do
-    settings = company_settings()
-    start_off = Map.get(settings, :period_start_offset_days, -20)
-    cutoff_off = Map.get(settings, :period_cutoff_offset_days, -7)
-
-    Enum.reduce(Date.range(first_payday, last_payday, 14), [], fn payday, acc ->
-      acc ++
-        [
-          %{
-            payday: payday,
-            start: Date.add(payday, start_off),
-            cutoff: Date.add(payday, cutoff_off)
-          }
-        ]
-    end)
-  end
-
-  @doc """
-  Returns [{period_map, index}] for the pay period that contains `date` (based on start..cutoff).
-  """
-  def sequence(date \\ Date.utc_today()) do
-    paydays = paydays_for_year(date.year)
-
-    case paydays do
-      [] ->
-        []
-
-      _ ->
-        first = List.first(paydays)
-        last = List.last(paydays)
-
-        periods(first, last)
-        |> Enum.with_index()
-        |> Enum.reduce([], fn {period, idx}, acc ->
-          if Enum.member?(Date.range(period.start, period.cutoff), date) do
-            acc ++ [{period, idx}]
-          else
-            acc
-          end
-        end)
-    end
-  end
-
-  @doc """
-  Returns the current period map for `date` or nil.
-  """
-  def current_period(date \\ Date.utc_today()) do
-    case sequence(date) do
-      [{period, _idx}] -> period
-      _ -> nil
-    end
-  end
-
-  defp shift_payday_to_on_or_after(anchor, target) do
-    diff = Date.diff(target, anchor)
-
-    k =
-      cond do
-        diff <= 0 -> 0
-        # ceil(diff/14)
-        true -> div(diff + 13, 14)
-      end
-
-    Date.add(anchor, 14 * k)
-  end
-
-  # -----------------------------------------------------------------------------
-  # Schedule preview helpers (SetupLive/AppLive)
-  # -----------------------------------------------------------------------------
-  def settings_preview(settings) when is_map(settings) do
-    start_off = Map.get(settings, :period_start_offset_days, -20)
-    cutoff_off = Map.get(settings, :period_cutoff_offset_days, -7)
-
-    next_paydays =
-      case Date.from_iso8601(Map.get(settings, :anchor_payday, "")) do
-        {:ok, anchor} -> next_paydays_from_anchor(anchor, Date.utc_today(), 3)
-        _ -> []
-      end
-
-    year = Date.utc_today().year
-
-    periods_per_year =
-      case Date.from_iso8601(Map.get(settings, :anchor_payday, "")) do
-        {:ok, anchor} -> pay_periods_per_year_with_anchor(year, anchor)
-        _ -> "?"
-      end
-
+  defp normalize_company_settings(settings) when is_map(settings) do
     %{
-      next_paydays_text:
-        case next_paydays do
-          [] -> "Enter a valid anchor payday"
-          ds -> Enum.map(ds, &Date.to_iso8601/1) |> Enum.join(", ")
-        end,
-      periods_per_year_text: to_string(periods_per_year),
-      start_offset_text: offset_text(start_off),
-      cutoff_offset_text: offset_text(cutoff_off)
+      name: get_string(settings, :name, "Company"),
+      province: get_string(settings, :province, "BC"),
+      address: get_string(settings, :address, ""),
+      phone: get_string(settings, :phone, ""),
+      email: get_string(settings, :email, ""),
+      business_number: get_string(settings, :business_number, ""),
+      payroll_account_rp: get_string(settings, :payroll_account_rp, ""),
+      gst_account_rt: get_string(settings, :gst_account_rt, ""),
+      pay_frequency:
+        settings
+        |> get_any(:pay_frequency, :biweekly)
+        |> normalize_pay_frequency(),
+      anchor_payday:
+        settings
+        |> get_any(:anchor_payday, Date.utc_today())
+        |> normalize_anchor_payday(),
+      period_start_offset_days:
+        settings
+        |> get_any(:period_start_offset_days, -20)
+        |> normalize_int(-20),
+      period_cutoff_offset_days:
+        settings
+        |> get_any(:period_cutoff_offset_days, -7)
+        |> normalize_int(-7)
     }
   end
 
-  def next_paydays_from_anchor(anchor_payday, from_date, n)
-      when is_struct(anchor_payday, Date) and is_struct(from_date, Date) and is_integer(n) and
-             n > 0 do
-    first = shift_payday_to_on_or_after(anchor_payday, from_date)
-
-    Date.range(first, Date.add(first, 14 * (n - 1)), 14)
-    |> Enum.to_list()
+  defp get_any(map, key, default) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key)) || default
   end
 
-  def pay_periods_per_year_with_anchor(year, anchor_payday)
-      when is_integer(year) and is_struct(anchor_payday, Date) do
-    jan1 = Date.new!(year, 1, 1)
-    dec31 = Date.new!(year, 12, 31)
-
-    first = shift_payday_to_on_or_after(anchor_payday, jan1)
-
-    Date.range(first, dec31, 14)
-    |> Enum.to_list()
-    |> length()
+  defp get_string(map, key, default) do
+    map
+    |> get_any(key, default)
+    |> to_string()
+  rescue
+    _ -> default
   end
 
-  defp offset_text(n) when is_integer(n) and n < 0, do: "#{n}d"
-  defp offset_text(n) when is_integer(n), do: "+#{n}d"
+  defp normalize_int(v, _default) when is_integer(v), do: v
 
-  # -----------------------------------------------------------------------------
-  # Hours helpers (Database owns Mnesia; Core provides safe wrappers)
-  # -----------------------------------------------------------------------------
-@doc """
-Inserts an hours entry tuple into the Hours table.
+  defp normalize_int(v, default) when is_binary(v) do
+    case Integer.parse(String.trim(v)) do
+      {n, ""} -> n
+      _ -> default
+    end
+  end
 
-Tuple format:
-  {Hours, full_name, date_iso, shift_start, shift_end, rate, hours, notes}
+  defp normalize_int(_, default), do: default
 
-Returns:
-  :ok
-  {:error, :duplicate}
-  {:error, :overlap}
-  {:error, {:duplicate, existing}}
-  {:error, {:overlap, existing}}
-  {:error, reason}
-"""
-def add_hours_entry(%{
-      full_name: full_name,
-      date: date_iso,
-      shift_start: shift_start,
-      shift_end: shift_end,
-      rate: rate,
-      hours: hours,
-      notes: notes
-    }) do
-  tuple = {Hours, full_name, date_iso, shift_start, shift_end, rate, hours, notes}
+  defp normalize_pay_frequency(v) when v in [:weekly, :biweekly, :semi_monthly, :monthly], do: v
 
-  # IMPORTANT: return the DB result so LiveView can show duplicate/overlap errors
-  Database.insert(tuple)
-end
+  defp normalize_pay_frequency(:semimonthly), do: :semi_monthly
 
-  defp duplicate_or_overlap(full_name, date_iso, shift_start, shift_end) do
-    existing =
+  defp normalize_pay_frequency(v) when is_binary(v) do
+    case String.trim(v) |> String.downcase() do
+      "weekly" -> :weekly
+      "biweekly" -> :biweekly
+      "semi_monthly" -> :semi_monthly
+      "semimonthly" -> :semi_monthly
+      "monthly" -> :monthly
+      _ -> :biweekly
+    end
+  end
+
+  defp normalize_pay_frequency(_), do: :biweekly
+
+  defp normalize_anchor_payday(%Date{} = d), do: Date.to_iso8601(d)
+
+  defp normalize_anchor_payday(v) when is_binary(v) do
+    case Date.from_iso8601(String.trim(v)) do
+      {:ok, d} -> Date.to_iso8601(d)
+      _ -> Date.utc_today() |> Date.to_iso8601()
+    end
+  end
+
+  defp normalize_anchor_payday(_), do: Date.utc_today() |> Date.to_iso8601()
+
+  # ---------- Hours ----------
+
+  @doc """
+  Inserts an hours entry tuple into the Hours table.
+
+  Returns:
+    :ok
+    {:ok, tuple}
+    {:error, {:duplicate_hours_entry, meta}}
+    {:error, {:overlapping_hours_entry, meta}}
+    {:error, reason}
+  """
+  def add_hours_entry(%{
+        full_name: full_name,
+        date: date_iso,
+        shift_start: shift_start,
+        shift_end: shift_end,
+        rate: rate,
+        hours: hours,
+        notes: notes
+      }) do
+    with {:ok, _} <- validate_shift_window(shift_start, shift_end),
+         :ok <- duplicate_and_overlap_guard(full_name, date_iso, shift_start, shift_end) do
+      tuple = {Hours, full_name, date_iso, shift_start, shift_end, rate, hours, notes}
+
+      case Database.insert1(tuple) do
+        :ok -> :ok
+        {:ok, _} = ok -> ok
+        other -> other
+      end
+    end
+  end
+
+  def hours_for_employee(full_name) do
+    Database.match({Hours, full_name, :_, :_, :_, :_, :_, :_})
+    |> Enum.map(fn {Hours, n, d, ss, se, r, h, notes} ->
+      {Hours, n, d, ss, se, r, h, notes}
+    end)
+  rescue
+    _ -> []
+  end
+
+  def current_period_totals(full_name) do
+    payrun = Payrun.build_current()
+
+    case Enum.find(payrun.lines, &(&1.full_name == full_name)) do
+      nil -> {0.0, 0.0}
+      line -> {num(line.total_hours), num(line.gross)}
+    end
+  end
+
+  # ---------- Payrun ----------
+
+  def finalize_payrun(payrun) when is_map(payrun), do: PayrunStore.save_run(payrun)
+  def list_payruns, do: PayrunStore.list_runs()
+  def get_payrun(run_id) when is_binary(run_id), do: PayrunStore.get_run(run_id)
+
+  # ---------- Paystub PDF ----------
+
+  def generate_paystub_pdf(run_id, full_name) when is_binary(run_id) and is_binary(full_name) do
+    with {:ok, run} <- get_payrun(run_id),
+         {:ok, pdf_binary, filename} <- PaystubPdf.render_for_employee(run, full_name) do
+      {:ok, %{filename: filename, binary: pdf_binary}}
+    else
+      nil -> {:error, :not_found}
+      {:error, :employee_not_found} -> {:error, :not_found}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  end
+
+  # ---------- Duplicate / overlap guards ----------
+
+  defp duplicate_and_overlap_guard(full_name, date_iso, shift_start, shift_end) do
+    entries =
       hours_for_employee(full_name)
-      |> Enum.filter(fn
-        {Hours, ^full_name, ^date_iso, _ss, _se, _rate, _hours, _notes} -> true
-        _ -> false
-      end)
+      |> Enum.filter(fn {Hours, _n, d, _ss, _se, _r, _h, _notes} -> d == date_iso end)
 
     cond do
-      exact_duplicate?(existing, shift_start, shift_end) ->
-        {:error, :duplicate}
+      exact_duplicate?(entries, shift_start, shift_end) ->
+        {:error,
+         {:duplicate_hours_entry,
+          %{full_name: full_name, date: date_iso, shift_start: shift_start, shift_end: shift_end}}}
 
-      overlaps_existing?(existing, shift_start, shift_end) ->
-        {:error, :overlap}
+      overlaps_existing?(entries, shift_start, shift_end) ->
+        {:error,
+         {:overlapping_hours_entry,
+          %{full_name: full_name, date: date_iso, shift_start: shift_start, shift_end: shift_end}}}
 
       true ->
         :ok
@@ -335,127 +273,65 @@ end
   end
 
   defp exact_duplicate?(entries, shift_start, shift_end) do
-    Enum.any?(entries, fn
-      {Hours, _n, _d, ss, se, _r, _h, _notes} ->
-        to_string(ss) == to_string(shift_start) and to_string(se) == to_string(shift_end)
-
-      _ ->
-        false
+    Enum.any?(entries, fn {Hours, _n, _d, ss, se, _r, _h, _notes} ->
+      ss == shift_start and se == shift_end
     end)
   end
 
   defp overlaps_existing?(entries, shift_start, shift_end) do
-    with {:ok, new_start, new_end} <- to_range(shift_start, shift_end) do
-      Enum.any?(entries, fn
-        {Hours, _n, _d, ss, se, _r, _h, _notes} ->
-          case to_range(ss, se) do
-            {:ok, old_start, old_end} ->
-              ranges_overlap?(new_start, new_end, old_start, old_end)
-
-            _ ->
-              false
-          end
-
-        _ ->
-          false
+    with {:ok, a1} <- hhmm_to_minutes(shift_start),
+         {:ok, a2} <- hhmm_to_minutes(shift_end) do
+      Enum.any?(entries, fn {Hours, _n, _d, ss, se, _r, _h, _notes} ->
+        case {hhmm_to_minutes(ss), hhmm_to_minutes(se)} do
+          {{:ok, b1}, {:ok, b2}} -> ranges_overlap?(a1, a2, b1, b2)
+          _ -> false
+        end
       end)
     else
       _ -> false
     end
   end
 
-  # Half-open interval overlap: [a1, a2) overlaps [b1, b2)
+  defp validate_shift_window(shift_start, shift_end) do
+    case {hhmm_to_minutes(shift_start), hhmm_to_minutes(shift_end)} do
+      {{:ok, a}, {:ok, b}} when b > a -> {:ok, b - a}
+      _ -> {:error, :invalid_shift_window}
+    end
+  end
+
   defp ranges_overlap?(a1, a2, b1, b2), do: a1 < b2 and b1 < a2
 
-  defp to_range(start_s, end_s) do
-    with {:ok, s} <- hhmm_to_minutes(start_s),
-         {:ok, e} <- hhmm_to_minutes(end_s),
-         true <- e > s do
-      {:ok, s, e}
+  defp hhmm_to_minutes(<<h::binary-size(2), ":", m::binary-size(2)>>) do
+    with {hh, ""} <- Integer.parse(h),
+         {mm, ""} <- Integer.parse(m),
+         true <- hh in 0..23,
+         true <- mm in 0..59 do
+      {:ok, hh * 60 + mm}
     else
       _ -> :error
     end
   end
 
-  defp hhmm_to_minutes(value) do
-    value =
-      value
-      |> to_string()
-      |> String.trim()
-      |> String.slice(0, 5)
+  defp hhmm_to_minutes(_), do: :error
 
-    case String.split(value, ":") do
-      [h, m] ->
-        with {hh, ""} <- Integer.parse(h),
-             {mm, ""} <- Integer.parse(m),
-             true <- hh in 0..23,
-             true <- mm in 0..59 do
-          {:ok, hh * 60 + mm}
-        else
-          _ -> :error
-        end
+  defp num(n) when is_integer(n), do: n * 1.0
+  defp num(n) when is_float(n), do: n
 
-      _ ->
-        :error
+  defp num(n) do
+    case Float.parse(to_string(n)) do
+      {f, _} -> f
+      _ -> 0.0
     end
   end
 
-  @doc "Returns all Hours tuples for an employee."
-  def hours_for_employee(full_name) when is_binary(full_name) do
-    Database.match({Hours, full_name, :_, :_, :_, :_, :_, :_})
-  end
-
-  @doc "Returns Hours tuples for employee within date range (inclusive)."
-  def hours_for_employee_in_range(full_name, start_date, end_date)
-      when is_binary(full_name) and is_struct(start_date, Date) and is_struct(end_date, Date) do
-    hours_for_employee(full_name)
-    |> Enum.filter(fn {Hours, ^full_name, date_iso, _ss, _se, _rate, _hours, _notes} ->
-      case Date.from_iso8601(to_string(date_iso)) do
-        {:ok, d} -> Enum.member?(Date.range(start_date, end_date), d)
-        _ -> false
-      end
-    end)
-  end
-
-  @doc "Sums total hours and gross for a list of Hours tuples."
-  def totals_hours_gross(hours_tuples) when is_list(hours_tuples) do
-    Enum.reduce(hours_tuples, {0.0, 0.0}, fn tuple, {h_acc, g_acc} ->
-      # {Hours, full_name, date, shift_start, shift_end, rate, hours, notes}
-      rate = elem(tuple, 5) * 1.0
-      hours = elem(tuple, 6) * 1.0
-      {h_acc + hours, g_acc + hours * rate}
-    end)
-  end
-
-  @doc """
-  Returns {total_hours, gross} for current period for employee based on settings.
-  """
-  def current_period_totals(full_name, date \\ Date.utc_today()) do
-    case current_period(date) do
-      nil ->
-        {0.0, 0.0}
-
-      %{start: start_d, cutoff: cutoff_d} ->
-        tuples = hours_for_employee_in_range(full_name, start_d, cutoff_d)
-        totals_hours_gross(tuples)
-    end
-  end
-def create_payrun(run_meta, lines), do: Core.PayrunStore.create_run(run_meta, lines)
-def list_payruns, do: Core.PayrunStore.list_runs()
-def get_payrun(run_id), do: Core.PayrunStore.get_run(run_id)
-def get_payrun_lines(run_id), do: Core.PayrunStore.get_run_lines(run_id)
-def get_payrun_with_lines(run_id), do: Core.PayrunStore.get_run_with_lines(run_id)
-
-# ---- Payrun persistence API ----
-
-@doc "List finalized payruns (newest first)."
-def list_payruns do
-  PayrunStore.list_runs()
+  def struct(module), do: Database.select(module)
+@doc """
+Rounds a numeric value to 2 decimal places for payroll money display/storage.
+Always returns a float.
+"""
+def money_round(value) do
+  value
+  |> num()
+  |> Float.round(2)
 end
-
-@doc "Fetch one finalized payrun by run_id."
-def get_payrun(run_id) when is_binary(run_id) do
-  PayrunStore.get_run(run_id)
-end
-
 end

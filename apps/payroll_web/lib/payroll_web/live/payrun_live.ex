@@ -83,26 +83,66 @@ defmodule PayrollWeb.PayrunLive do
     {:noreply, put_flash(socket, :info, "#{feature} is next on the payrun roadmap")}
   end
 
-  @impl true
-  def handle_event("finalize", _params, socket) do
-    case Core.save_payrun(socket.assigns.payrun) do
-      {:ok, run_id} ->
-        {:noreply,
-         socket
-         |> assign(:last_saved_run_id, run_id)
-         |> put_flash(:info, "Payrun finalized and saved (#{run_id})")}
+@impl true
+def handle_event("finalize", _params, socket) do
+  lines = socket.assigns.lines || []
+
+  if lines == [] do
+    {:noreply, put_flash(socket, :error, "Cannot finalize an empty payrun")}
+  else
+    case Core.finalize_payrun(socket.assigns.payrun) do
+      {:ok, saved_run} ->
+        case extract_run_id(saved_run) do
+          {:ok, run_id} ->
+            {:noreply,
+             socket
+             |> assign(:last_saved_run_id, run_id)
+             |> put_flash(:info, "Payrun finalized")
+             |> push_navigate(to: "/payruns/#{run_id}")}
+
+          :error ->
+            {:noreply,
+             put_flash(socket, :error, "Could not finalize payrun: invalid save response")}
+        end
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not finalize payrun: #{inspect(reason)}")}
 
       other ->
-        {:noreply, put_flash(socket, :error, "Unexpected finalize result: #{inspect(other)}")}
+        case extract_run_id(other) do
+          {:ok, run_id} ->
+            {:noreply,
+             socket
+             |> assign(:last_saved_run_id, run_id)
+             |> put_flash(:info, "Payrun finalized")
+             |> push_navigate(to: "/payruns/#{run_id}")}
+
+          :error ->
+            {:noreply,
+             put_flash(socket, :error, "Could not finalize payrun: #{inspect(other)}")}
+        end
     end
   end
+end
+
+defp extract_run_id(run_id) when is_binary(run_id), do: {:ok, run_id}
+
+defp extract_run_id(%{} = saved_run) do
+  run_id =
+    Map.get(saved_run, :run_id) ||
+      Map.get(saved_run, "run_id") ||
+      Map.get(saved_run, :id) ||
+      Map.get(saved_run, "id")
+
+  if is_binary(run_id), do: {:ok, run_id}, else: :error
+end
+
+defp extract_run_id(_), do: :error
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :visible_lines, visible_lines(assigns.lines, assigns.employee_filter))
+    assigns =
+      assign(assigns, :visible_lines, visible_lines(assigns.lines, assigns.employee_filter))
 
     ~H"""
     <div class="p-6 max-w-5xl mx-auto space-y-4">
@@ -113,7 +153,7 @@ defmodule PayrollWeb.PayrunLive do
         </div>
 
         <a href="/app" class="text-sm underline">Back</a>
-<a href="/payruns" class="px-3 py-2 rounded border text-sm">History</a>
+    <a href="/payruns" class="px-3 py-2 rounded border text-sm">History</a>
       </div>
 
       <div class="rounded border p-4 space-y-3">
@@ -206,13 +246,15 @@ defmodule PayrollWeb.PayrunLive do
               ROE
             </button>
 
-            <button
-              type="button"
-              phx-click="finalize"
-              class="px-3 py-2 rounded bg-black text-white"
-            >
-              Finalize
-            </button>
+    <button
+    type="button"
+    phx-click="finalize"
+    class="px-3 py-2 rounded bg-black text-white disabled:opacity-50"
+    disabled={@lines == []}
+    >
+    Finalize
+    </button>
+
           </div>
         </div>
       </div>

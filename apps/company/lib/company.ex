@@ -30,10 +30,16 @@ defmodule Company do
     GenServer.start_link(__MODULE__, :ok, opts)
   end
 
+  # Current API
   def settings, do: GenServer.call(__MODULE__, :settings)
 
   def update_settings(attrs) when is_map(attrs),
     do: GenServer.call(__MODULE__, {:update_settings, attrs})
+
+  # Compatibility API (for Core / older callers)
+  def get_settings, do: settings()
+
+  def put_settings(attrs) when is_map(attrs), do: update_settings(attrs)
 
   # -----------------------------------------------------------------------------
   # GenServer callbacks
