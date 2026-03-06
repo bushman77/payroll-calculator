@@ -514,4 +514,212 @@ defmodule Core do
   def sequence do
     sequence(Date.utc_today())
   end
+
+@doc """
+CPP employee contribution for the current pay period.
+
+Uses the pensionable earnings basis for the period and applies the employee CPP rate.
+"""
+def cpp_deduction(year, period_gross, periods_per_year) do
+  cpp_earnings(year, period_gross, periods_per_year)
+  |> Kernel.*(cpp_employee_rate(year))
+  |> money_round()
+end
+
+@doc """
+YTD CPP employee contribution estimate based on YTD gross.
+
+This is a simplified YTD estimate (cap on annual pensionable earnings, then rate).
+It avoids applying the per-period basic exemption repeatedly to YTD gross.
+"""
+def cpp_deduction_ytd(year, ytd_gross) do
+  pensionable_ytd =
+    ytd_gross
+    |> num()
+    |> max(0.0)
+    |> min(cpp_ympe(year))
+    |> Kernel.-(cpp_basic_exemption())
+    |> max(0.0)
+
+  pensionable_ytd
+  |> Kernel.*(cpp_employee_rate(year))
+  |> money_round()
+end
+
+@doc """
+EI employee premium for the current pay period.
+"""
+def ei_deduction(year, period_gross) do
+  period_gross
+  |> num()
+  |> max(0.0)
+  |> min(ei_max_insurable(year))
+  |> Kernel.*(ei_employee_rate(year))
+  |> money_round()
+end
+
+@doc """
+YTD EI employee premium estimate based on YTD insurable earnings.
+"""
+def ei_deduction_ytd(year, ytd_gross) do
+  ei_earnings(year, ytd_gross)
+  |> Kernel.*(ei_employee_rate(year))
+  |> money_round()
+end
+
+# Employee CPP contribution rate (first additional tier not modeled yet)
+defp cpp_employee_rate(year) when is_binary(year) do
+  case Integer.parse(String.trim(year)) do
+    {y, _} -> cpp_employee_rate(y)
+    _ -> cpp_employee_rate(Date.utc_today().year)
+  end
+end
+
+defp cpp_employee_rate(year) when is_integer(year) do
+  case year do
+    2024 -> 0.0595
+    2025 -> 0.0595
+    2026 -> 0.0595
+    _ -> 0.0595
+  end
+end
+
+defp cpp_employee_rate(_), do: cpp_employee_rate(Date.utc_today().year)
+
+# EI employee premium rate (outside Quebec)
+defp ei_employee_rate(year) when is_binary(year) do
+  case Integer.parse(String.trim(year)) do
+    {y, _} -> ei_employee_rate(y)
+    _ -> ei_employee_rate(Date.utc_today().year)
+  end
+end
+
+defp ei_employee_rate(year) when is_integer(year) do
+  case year do
+    2024 -> 0.0166
+    2025 -> 0.0164
+    2026 -> 0.0163
+    _ -> 0.0163
+  end
+end
+
+defp ei_employee_rate(_), do: ei_employee_rate(Date.utc_today().year)
+
+# ---------- Pay period compatibility (tests / legacy callers) ----------
+
+@doc """
+Returns the pay period map for the given date.
+
+Legacy shape compatibility:
+- start / cutoff / payday are provided as ISO strings.
+"""
+def current_period(date \\ Date.utc_today()) do
+  p = PayPeriod.period_for_date(date)
+
+  %{
+    start: p.start_iso,
+    cutoff: p.end_iso,
+    payday: p.end_iso,
+    schedule: p.schedule,
+    period_index: p.period_index,
+    start_date: p.start_date,
+    end_date: p.end_date,
+    start_iso: p.start_iso,
+    end_iso: p.end_iso
+  }
+end
+
+@doc """
+Returns a list of paydays for the given year based on current company settings.
+
+This is primarily used by older tests. For weekly/biweekly it uses cadence from
+the configured anchor payday. For semimonthly/monthly it returns convention dates.
+"""
+def paydays_for_year(year) when is_integer(year) do
+  settings = company_settings()
+  freq = Map.get(settings, :pay_frequency, :biweekly)
+
+  anchor =
+    settings
+    |> Map.get(:anchor_payday, Date.utc_today())
+    |> case do
+      %Date{} = d -> d
+      iso when is_binary(iso) ->
+        case Date.from_iso8601(String.trim(iso)) do
+          {:ok, d} -> d
+          _ -> Date.utc_today()
+        end
+      _ -> Date.utc_today()
+    end
+
+  case freq do
+    :weekly ->
+      cadence_paydays_for_year(year, anchor, 7)
+
+    :biweekly ->
+      cadence_paydays_for_year(year, anchor, 14)
+
+    :semi_monthly ->
+      semimonthly_paydays_for_year(year)
+
+    :monthly ->
+      monthly_paydays_for_year(year, anchor.day)
+
+    _other ->
+      # fallback to biweekly
+      cadence_paydays_for_year(year, anchor, 14)
+  end
+end
+
+def paydays_for_year(year) when is_binary(year) do
+  case Integer.parse(String.trim(year)) do
+    {y, _} -> paydays_for_year(y)
+    _ -> paydays_for_year(Date.utc_today().year)
+  end
+end
+
+defp cadence_paydays_for_year(year, anchor, step_days) do
+  start_of_year = Date.new!(year, 1, 1)
+  end_of_year = Date.new!(year, 12, 31)
+
+  # find first payday on/after Jan 1 for that year
+  days = Date.diff(start_of_year, anchor)
+  idx = floor_div(days, step_days)
+  candidate = Date.add(anchor, idx * step_days)
+  first = if Date.compare(candidate, start_of_year) == :lt, do: Date.add(candidate, step_days), else: candidate
+
+  Stream.iterate(first, &Date.add(&1, step_days))
+  |> Stream.take_while(&(Date.compare(&1, end_of_year) != :gt))
+  |> Enum.to_list()
+end
+
+defp semimonthly_paydays_for_year(year) do
+  for month <- 1..12, day <- [15, :eom] do
+    case day do
+      15 -> Date.new!(year, month, 15)
+      :eom -> Date.end_of_month(Date.new!(year, month, 1))
+    end
+  end
+end
+
+defp monthly_paydays_for_year(year, dom) when is_integer(dom) do
+  for month <- 1..12 do
+    first = Date.new!(year, month, 1)
+    max_day = Date.days_in_month(first)
+    Date.new!(year, month, min(dom, max_day))
+  end
+end
+
+# local floor_div (same behavior as in Core.PayPeriod)
+defp floor_div(a, b) when is_integer(a) and is_integer(b) and b > 0 do
+  q = div(a, b)
+  r = rem(a, b)
+
+  if r != 0 and a < 0 do
+    q - 1
+  else
+    q
+  end
+end
+
 end

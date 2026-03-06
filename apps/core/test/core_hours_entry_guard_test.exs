@@ -14,7 +14,7 @@ defmodule CoreHoursEntryGuardTest do
       Database.select(Hours)
       |> Enum.each(fn
         {Hours, @employee, ^date, _ss, _se, _rate, _hours, _notes} = row ->
-          _ = Database.delete_object(row)
+          _ = Database.delete(row)
           :ok
 
         _ ->

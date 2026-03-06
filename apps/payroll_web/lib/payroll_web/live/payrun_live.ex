@@ -1,7 +1,6 @@
 defmodule PayrollWeb.PayrunLive do
   use PayrollWeb, :live_view
 
-  alias Core
   alias Core.Payrun
 
   @impl true
@@ -72,9 +71,7 @@ defmodule PayrollWeb.PayrunLive do
 
   @impl true
   def handle_event("toggle_line", %{"name" => full_name}, socket) do
-    expanded =
-      Map.update(socket.assigns.expanded, full_name, true, fn v -> not v end)
-
+    expanded = Map.update(socket.assigns.expanded, full_name, true, fn v -> not v end)
     {:noreply, assign(socket, :expanded, expanded)}
   end
 
@@ -83,61 +80,57 @@ defmodule PayrollWeb.PayrunLive do
     {:noreply, put_flash(socket, :info, "#{feature} is next on the payrun roadmap")}
   end
 
-@impl true
-def handle_event("finalize", _params, socket) do
-  lines = socket.assigns.lines || []
+  @impl true
+  def handle_event("finalize", _params, socket) do
+    lines = socket.assigns.lines || []
 
-  if lines == [] do
-    {:noreply, put_flash(socket, :error, "Cannot finalize an empty payrun")}
-  else
-    case Core.finalize_payrun(socket.assigns.payrun) do
-      {:ok, saved_run} ->
-        case extract_run_id(saved_run) do
-          {:ok, run_id} ->
-            {:noreply,
-             socket
-             |> assign(:last_saved_run_id, run_id)
-             |> put_flash(:info, "Payrun finalized")
-             |> push_navigate(to: "/payruns/#{run_id}")}
+    if lines == [] do
+      {:noreply, put_flash(socket, :error, "Cannot finalize an empty payrun")}
+    else
+      case Core.finalize_payrun(socket.assigns.payrun) do
+        {:ok, run_id, :created} ->
+          {:noreply,
+           socket
+           |> assign(:last_saved_run_id, run_id)
+           |> put_flash(:info, "Payrun finalized")
+           |> push_navigate(to: "/payruns/#{run_id}")}
 
-          :error ->
-            {:noreply,
-             put_flash(socket, :error, "Could not finalize payrun: invalid save response")}
-        end
+        {:ok, run_id, :existing} ->
+          {:noreply,
+           socket
+           |> assign(:last_saved_run_id, run_id)
+           |> put_flash(:info, "Payrun already finalized for this pay period")
+           |> push_navigate(to: "/payruns/#{run_id}")}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not finalize payrun: #{inspect(reason)}")}
+        {:ok, run_id} when is_binary(run_id) ->
+          # Backward compatibility if finalize_payrun still returns {:ok, run_id}
+          {:noreply,
+           socket
+           |> assign(:last_saved_run_id, run_id)
+           |> put_flash(:info, "Payrun finalized")
+           |> push_navigate(to: "/payruns/#{run_id}")}
 
-      other ->
-        case extract_run_id(other) do
-          {:ok, run_id} ->
-            {:noreply,
-             socket
-             |> assign(:last_saved_run_id, run_id)
-             |> put_flash(:info, "Payrun finalized")
-             |> push_navigate(to: "/payruns/#{run_id}")}
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Could not finalize payrun: #{inspect(reason)}")}
 
-          :error ->
-            {:noreply,
-             put_flash(socket, :error, "Could not finalize payrun: #{inspect(other)}")}
-        end
+        other ->
+          # Best-effort extraction for legacy return shapes
+          case extract_run_id(other) do
+            {:ok, run_id} ->
+              {:noreply,
+               socket
+               |> assign(:last_saved_run_id, run_id)
+               |> put_flash(:info, "Payrun finalized")
+               |> push_navigate(to: "/payruns/#{run_id}")}
+
+            :error ->
+              {:noreply, put_flash(socket, :error, "Could not finalize payrun: #{inspect(other)}")}
+          end
+      end
     end
   end
-end
 
-defp extract_run_id(run_id) when is_binary(run_id), do: {:ok, run_id}
-
-defp extract_run_id(%{} = saved_run) do
-  run_id =
-    Map.get(saved_run, :run_id) ||
-      Map.get(saved_run, "run_id") ||
-      Map.get(saved_run, :id) ||
-      Map.get(saved_run, "id")
-
-  if is_binary(run_id), do: {:ok, run_id}, else: :error
-end
-
-defp extract_run_id(_), do: :error
+  # ---------------- render ----------------
 
   @impl true
   def render(assigns) do
@@ -153,7 +146,7 @@ defp extract_run_id(_), do: :error
         </div>
 
         <a href="/app" class="text-sm underline">Back</a>
-    <a href="/payruns" class="px-3 py-2 rounded border text-sm">History</a>
+        <a href="/payruns" class="px-3 py-2 rounded border text-sm">History</a>
       </div>
 
       <div class="rounded border p-4 space-y-3">
@@ -246,15 +239,14 @@ defp extract_run_id(_), do: :error
               ROE
             </button>
 
-    <button
-    type="button"
-    phx-click="finalize"
-    class="px-3 py-2 rounded bg-black text-white disabled:opacity-50"
-    disabled={@lines == []}
-    >
-    Finalize
-    </button>
-
+            <button
+              type="button"
+              phx-click="finalize"
+              class="px-3 py-2 rounded bg-black text-white disabled:opacity-50"
+              disabled={@lines == []}
+            >
+              Finalize
+            </button>
           </div>
         </div>
       </div>
@@ -388,6 +380,20 @@ defp extract_run_id(_), do: :error
       end)
     end
   end
+
+  defp extract_run_id(run_id) when is_binary(run_id), do: {:ok, run_id}
+
+  defp extract_run_id(%{} = saved_run) do
+    run_id =
+      Map.get(saved_run, :run_id) ||
+        Map.get(saved_run, "run_id") ||
+        Map.get(saved_run, :id) ||
+        Map.get(saved_run, "id")
+
+    if is_binary(run_id), do: {:ok, run_id}, else: :error
+  end
+
+  defp extract_run_id(_), do: :error
 
   defp format_date(%Date{} = d), do: Calendar.strftime(d, "%Y-%m-%d")
   defp format_date(other), do: to_string(other)

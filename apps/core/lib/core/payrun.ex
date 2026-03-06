@@ -1,33 +1,25 @@
+# lib/core/payrun.ex
 defmodule Core.Payrun do
   @moduledoc """
   Minimal payrun aggregation built on top of `Core.PayPeriod`.
 
   This module calculates period totals from saved Hours entries and returns a
   normalized payrun structure you can use for UI, exports, and later ROE work.
-
-  Assumptions:
-    * `Core.hours_for_employee/1` returns tuples shaped like:
-      `{Hours, full_name, date_iso, shift_start, shift_end, rate, hours, notes}`
-    * `Employee.active/0` returns active employees as `{full_name, employee_struct}` tuples
-      (used by `build_current/0` and `build_for_date/1`)
-
-  This is intentionally minimal:
-    * gross only
-    * no tax/CPP/EI yet
-    * no persistence yet
   """
 
   alias Core.PayPeriod
-
-  @type hours_row ::
-          {module(), String.t(), String.t(), String.t(), String.t(), number(), number(), any()}
 
   @type payrun_line :: %{
           full_name: String.t(),
           entries: [map()],
           total_hours: float(),
           hourly_rate: float(),
-          gross: float()
+          gross: float(),
+          cpp: float(),
+          ei: float(),
+          income_tax: float(),
+          total_deductions: float(),
+          net_pay: float()
         }
 
   @type payrun :: %{
@@ -38,31 +30,18 @@ defmodule Core.Payrun do
           lines: [payrun_line()]
         }
 
-  # ---------------- Public API ----------------
-
-  @doc """
-  Builds a payrun for the current configured pay period and all active employees.
-  """
   @spec build_current() :: payrun()
   def build_current do
     period = PayPeriod.current_period()
     build_for_period(period)
   end
 
-  @doc """
-  Builds a payrun for the pay period containing the given date and all active employees.
-
-  Accepts a `Date` or ISO string.
-  """
   @spec build_for_date(Date.t() | String.t()) :: payrun()
   def build_for_date(date) do
     period = PayPeriod.period_for_date(date)
     build_for_period(period)
   end
 
-  @doc """
-  Builds a payrun for an explicit period map (from `Core.PayPeriod`).
-  """
   @spec build_for_period(PayPeriod.period()) :: payrun()
   def build_for_period(%{start_date: _sd, end_date: _ed} = period) do
     lines =
@@ -90,27 +69,18 @@ defmodule Core.Payrun do
     }
   end
 
-  @doc """
-  Builds a single employee line for the current period.
-  """
   @spec build_employee_current(String.t()) :: payrun_line()
   def build_employee_current(full_name) when is_binary(full_name) do
     build_employee_line(full_name, PayPeriod.current_period())
   end
 
-  @doc """
-  Builds a single employee line for the period containing the given date.
-  """
   @spec build_employee_for_date(String.t(), Date.t() | String.t()) :: payrun_line()
   def build_employee_for_date(full_name, date) when is_binary(full_name) do
     build_employee_line(full_name, PayPeriod.period_for_date(date))
   end
 
-  @doc """
-  Builds a single employee line for an explicit period.
-  """
   @spec build_employee_line(String.t(), PayPeriod.period()) :: payrun_line()
-  def build_employee_line(full_name, %{start_date: start_date, end_date: end_date} = _period)
+  def build_employee_line(full_name, %{start_date: start_date, end_date: end_date} = period)
       when is_binary(full_name) do
     entries =
       Core.hours_for_employee(full_name)
@@ -130,33 +100,97 @@ defmodule Core.Payrun do
 
     hourly_rate = infer_hourly_rate(entries)
 
+    {cpp, ei, income_tax, total_deductions, net_pay} = calculate_deductions(period, gross)
+
     %{
       full_name: full_name,
       entries: entries,
       total_hours: total_hours,
       hourly_rate: hourly_rate,
-      gross: gross
+      gross: gross,
+      cpp: cpp,
+      ei: ei,
+      income_tax: income_tax,
+      total_deductions: total_deductions,
+      net_pay: net_pay
     }
   end
 
   # ---------------- Internal helpers ----------------
-defp active_employee_names do
-  Core.Query.match({Employee, :_, :_})
-  |> Enum.filter(fn
-    {Employee, _full_name, emp} -> Map.get(emp, :status, :active) == :active
-    _ -> false
-  end)
-  |> Enum.map(fn {Employee, full_name, _emp} -> to_string(full_name) end)
-  |> Enum.sort_by(&String.downcase/1)
-rescue
-  _ -> []
-end
 
-  defp row_in_period?(
-         {_Hours, _name, date_iso, _ss, _se, _rate, _hours, _notes},
-         start_date,
-         end_date
-       ) do
+  defp active_employee_names do
+    Core.Query.match({Employee, :_, :_})
+    |> Enum.filter(fn
+      {Employee, _full_name, emp} -> Map.get(emp, :status, :active) == :active
+      _ -> false
+    end)
+    |> Enum.map(fn {Employee, full_name, _emp} -> to_string(full_name) end)
+    |> Enum.sort_by(&String.downcase/1)
+  rescue
+    _ -> []
+  end
+
+  defp calculate_deductions(period, gross) do
+    year = period.start_date.year
+
+    settings = safe_company_settings()
+    pay_frequency = Map.get(settings, :pay_frequency, :biweekly)
+    province = Map.get(settings, :province, "BC")
+
+    periods_per_year =
+      if function_exported?(Core, :pay_periods_per_year, 1) do
+        Core.pay_periods_per_year(year)
+      else
+        PayPeriod.periods_per_year(pay_frequency)
+      end
+
+    cpp =
+      if function_exported?(Core, :cpp_deduction, 3) do
+        Core.cpp_deduction(year, gross, periods_per_year)
+      else
+        0.0
+      end
+
+    ei =
+      if function_exported?(Core, :ei_deduction, 2) do
+        Core.ei_deduction(year, gross)
+      else
+        0.0
+      end
+
+    # CRA T4127-style withholding (v1: Fed + BC)
+    income_tax =
+      if Code.ensure_loaded?(Core.Tax) and function_exported?(Core.Tax, :withholding, 1) do
+        Core.Tax.withholding(%{
+          year: year,
+          province: province,
+          pay_frequency: pay_frequency,
+          gross: gross,
+          cpp: cpp,
+          ei: ei
+        })
+      else
+        # fallback if Core.Tax not compiled yet
+        money_round(gross * 0.0506)
+      end
+
+    total_deductions = money_round(cpp + ei + income_tax)
+    net_pay = money_round(gross - total_deductions)
+
+    {money_round(cpp), money_round(ei), money_round(income_tax), total_deductions, net_pay}
+  end
+
+  defp safe_company_settings do
+    if Code.ensure_loaded?(Core) and function_exported?(Core, :company_settings, 0) do
+      Core.company_settings()
+    else
+      %{}
+    end
+  rescue
+    _ -> %{}
+  end
+
+  defp row_in_period?({_Hours, _name, date_iso, _ss, _se, _rate, _hours, _notes}, start_date, end_date) do
     case Date.from_iso8601(to_string(date_iso)) do
       {:ok, d} ->
         Date.compare(d, start_date) != :lt and Date.compare(d, end_date) != :gt
@@ -185,8 +219,6 @@ end
   defp infer_hourly_rate([]), do: 0.0
 
   defp infer_hourly_rate(entries) do
-    # Minimal approach:
-    # Prefer the most recent entry rate in-period.
     entries
     |> List.last()
     |> case do

@@ -1,3 +1,4 @@
+# lib/core/paystub_pdf.ex
 defmodule Core.PaystubPdf do
   @moduledoc """
   Paystub PDF generator (single employee / single payrun line).
@@ -84,7 +85,6 @@ defmodule Core.PaystubPdf do
   end
 
   defp try_draw_logo(pdf, path) do
-    # CRA-style spacing: small logo, left lane, no crowding
     logo_pos = {30, 748}
     logo_width = 50
 
@@ -121,17 +121,35 @@ defmodule Core.PaystubPdf do
   defp draw_header(pdf, paystub, generated_at) do
     left_x = 116
 
+    run_id_short =
+      paystub
+      |> Map.get(:display_run_id, nil)
+      |> case do
+        nil ->
+          Map.get(paystub, :run_id, "")
+          |> to_string()
+          |> String.replace_prefix("pr_", "")
+          |> String.split("_")
+          |> Enum.take(2)
+          |> Enum.join("_")
+
+        s ->
+          to_string(s)
+      end
+
+    status = Map.get(paystub, :status, "")
+
     pdf
     # Title row
     |> text_bold_big({left_x, 792}, "STATEMENT OF EARNINGS (PAY STUB)")
     |> text({430, 792}, "Generated:")
     |> text({482, 792}, generated_at)
 
-    # Meta row
-    |> text({left_x, 774}, "Run ID: #{Map.get(paystub, :run_id, "")}")
-    |> text({310, 774}, "Status: #{Map.get(paystub, :status, "")}")
+    # Meta rows (split to prevent collisions)
+    |> text({left_x, 774}, "Run ID: #{run_id_short}")
+    |> text({left_x, 758}, "Status: #{status}")
 
-    # Divider lowered to fully clear logo
+    # Divider lowered to fully clear logo + header rows
     |> separator({40, 742}, 532)
   end
 
@@ -172,7 +190,6 @@ defmodule Core.PaystubPdf do
   defp draw_earnings_block(pdf, paystub) do
     e = Map.get(paystub, :earnings, %{})
 
-    # fixed CRA-ish accounting columns
     x_type = 40
     x_hours_r = 270
     x_rate_r = 370
@@ -195,7 +212,6 @@ defmodule Core.PaystubPdf do
     d = Map.get(paystub, :deductions, %{})
     t = Map.get(paystub, :totals, %{})
 
-    # left half: deductions
     pdf =
       pdf
       |> text_bold({40, 538}, "DEDUCTIONS")
@@ -206,7 +222,6 @@ defmodule Core.PaystubPdf do
       |> text({40, 488}, "Income Tax")
       |> text_right({225, 488}, "$#{fmt2(Map.get(d, :income_tax, 0))}")
 
-    # right half: totals
     pdf
     |> text_bold({310, 538}, "TOTALS")
     |> text({310, 520}, "Gross")
@@ -218,31 +233,28 @@ defmodule Core.PaystubPdf do
     |> separator({40, 472}, 532)
   end
 
-defp draw_ytd_block(pdf, paystub) do
-  ytd = Map.get(paystub, :ytd, %{})
+  defp draw_ytd_block(pdf, paystub) do
+    ytd = Map.get(paystub, :ytd, %{})
 
-  # Use SAME x for header + value so they visually stack
-  cols = [
-    %{label: "Gross", x: 40,  key: :gross},
-    %{label: "CPP",   x: 160, key: :cpp},
-    %{label: "EI",    x: 260, key: :ei},
-    %{label: "Tax",   x: 360, key: :income_tax},
-    %{label: "Net",   x: 460, key: :net}
-  ]
+    cols = [
+      %{label: "Gross", x: 40, key: :gross},
+      %{label: "CPP", x: 160, key: :cpp},
+      %{label: "EI", x: 260, key: :ei},
+      %{label: "Tax", x: 360, key: :income_tax},
+      %{label: "Net", x: 460, key: :net}
+    ]
 
-  pdf =
-    pdf
-    |> text_bold({40, 454}, "YEAR-TO-DATE")
+    pdf = pdf |> text_bold({40, 454}, "YEAR-TO-DATE")
 
-  pdf =
-    Enum.reduce(cols, pdf, fn col, acc ->
-      acc
-      |> text_bold({col.x, 436}, col.label)
-      |> text({col.x, 420}, "$#{fmt2(Map.get(ytd, col.key, 0))}")
-    end)
+    pdf =
+      Enum.reduce(cols, pdf, fn col, acc ->
+        acc
+        |> text_bold({col.x, 436}, col.label)
+        |> text({col.x, 420}, "$#{fmt2(Map.get(ytd, col.key, 0))}")
+      end)
 
-  separator(pdf, {40, 404}, 532)
-end
+    separator(pdf, {40, 404}, 532)
+  end
 
   defp draw_footer(pdf, paystub) do
     source = Map.get(paystub, :source, %{})
@@ -327,15 +339,21 @@ end
 
   defp temp_pdf_path(paystub) do
     tmp_dir = System.tmp_dir() || "/tmp"
-    run_id = Map.get(paystub, :run_id, "run")
+
+    run_id_short =
+      paystub
+      |> Map.get(:display_run_id, Map.get(paystub, :run_id, "run"))
+      |> to_string()
+      |> slug()
+
     employee_slug = paystub |> get_in([:employee, :full_name]) |> slug()
-    filename = "paystub_#{employee_slug}_#{run_id}.pdf"
+    filename = "paystub_#{employee_slug}_#{run_id_short}.pdf"
     {:ok, Path.join(tmp_dir, filename), filename}
   rescue
     e -> {:error, {:tmp_path_failed, e}}
   end
 
-  defp slug(nil), do: "employee"
+  defp slug(nil), do: "value"
 
   defp slug(value) do
     value
@@ -344,7 +362,7 @@ end
     |> String.replace(~r/[^a-z0-9]+/u, "-")
     |> String.trim("-")
     |> case do
-      "" -> "employee"
+      "" -> "value"
       s -> s
     end
   end
